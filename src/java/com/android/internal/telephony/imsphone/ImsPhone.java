@@ -1127,7 +1127,7 @@ public class ImsPhone extends ImsPhoneBase {
         return mDefaultPhone.getPhoneId();
     }
 
-    private IccRecords getIccRecords() {
+    public IccRecords getIccRecords() {
         return mDefaultPhone.mIccRecords.get();
     }
 
