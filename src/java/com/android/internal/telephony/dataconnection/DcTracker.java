@@ -741,13 +741,6 @@ public final class DcTracker extends DcTrackerBase {
             if (DBG && !recordsLoaded) log("isDataAllowed getRecordsLoaded=" + recordsLoaded);
         }
 
-        //FIXME always attach
-        boolean psRestricted = mIsPsRestricted;
-        int phoneNum = TelephonyManager.getDefault().getPhoneCount();
-        if (phoneNum > 1) {
-            attachedState = true;
-            psRestricted = false;
-        }
         int dataSub = SubscriptionManager.getDefaultDataSubId();
         boolean defaultDataSelected = SubscriptionManager.isValidSubscriptionId(dataSub);
         PhoneConstants.State state = PhoneConstants.State.IDLE;
@@ -761,6 +754,7 @@ public final class DcTracker extends DcTrackerBase {
         if (mPhone.getCallTracker() != null) {
             state = mPhone.getCallTracker().getState();
         }
+
         boolean allowed =
                     (attachedState || (mAutoAttachOnCreation.get() &&
                             (mPhone.getSubId() == dataSub))) &&
@@ -770,8 +764,7 @@ public final class DcTracker extends DcTrackerBase {
                     internalDataEnabled &&
                     defaultDataSelected &&
                     (!mPhone.getServiceState().getDataRoaming() || getDataOnRoamingEnabled()) &&
-                    //!mIsPsRestricted &&
-                    !psRestricted &&
+                    !mIsPsRestricted &&
                     desiredPowerState;
         if (!allowed && DBG) {
             String reason = "";
