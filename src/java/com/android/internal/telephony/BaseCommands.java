@@ -881,4 +881,8 @@ public abstract class BaseCommands implements CommandsInterface {
     public void unregisterForRadioCapabilityChanged(Handler h) {
         mPhoneRadioCapabilityChangedRegistrants.remove(h);
     }
+
+    @Override
+    public void setLocalCallHold(boolean lchStatus) {
+    }
 }

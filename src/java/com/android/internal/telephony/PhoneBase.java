@@ -2212,4 +2212,9 @@ public abstract class PhoneBase extends Handler implements Phone {
         pw.flush();
         pw.println("++++++++++++++++++++++++++++++++");
     }
+
+    @Override
+    public void setLocalCallHold(boolean lchStatus) {
+        mCi.setLocalCallHold(lchStatus);
+    }
 }

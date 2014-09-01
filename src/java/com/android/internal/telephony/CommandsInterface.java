@@ -1971,4 +1971,9 @@ public interface CommandsInterface {
      * @param h Handler to be removed from the registrant list.
      */
     public void unregisterForRadioCapabilityChanged(Handler h);
+    /**
+     * Request to update the current local call hold state.
+     * @param lchStatus, true if call is in lch state
+     */
+    public void setLocalCallHold(boolean lchStatus);
 }
