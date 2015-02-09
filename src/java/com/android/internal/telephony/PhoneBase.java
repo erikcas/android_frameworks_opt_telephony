@@ -222,7 +222,8 @@ public abstract class PhoneBase extends Handler implements Phone {
     private boolean mImsServiceReady = false;
     protected ImsPhone mImsPhone = null;
 
-    protected int mRadioAccessFamily = RadioAccessFamily.RAF_UNKNOWN;
+    protected final AtomicReference<RadioCapability> mRadioCapability =
+            new AtomicReference<RadioCapability>();
 
     @Override
     public String getPhoneName() {
@@ -577,10 +578,10 @@ public abstract class PhoneBase extends Handler implements Phone {
                     Rlog.d(LOG_TAG, "get phone radio capability fail,"
                             + "no need to change mRadioAccessFamily");
                 } else {
-                    mRadioAccessFamily = rc.getRadioAccessFamily();
+                    mRadioCapability.set(rc);
                 }
                 Rlog.d(LOG_TAG, "EVENT_GET_RADIO_CAPABILITY :"
-                        + "phone RAF : " + mRadioAccessFamily);
+                        + "phone rc : " + rc);
                 break;
 
             default:
@@ -2111,7 +2112,17 @@ public abstract class PhoneBase extends Handler implements Phone {
 
     @Override
     public int getRadioAccessFamily() {
-        return mRadioAccessFamily;
+        return mRadioCapability.get().getRadioAccessFamily();
+    }
+
+    @Override
+    public String getModemUuId() {
+        return mRadioCapability.get().getLogicalModemUuid();
+    }
+
+    @Override
+    public void updateCachedRadioCapability(RadioCapability rc) {
+        mRadioCapability.set(rc);
     }
 
     @Override
