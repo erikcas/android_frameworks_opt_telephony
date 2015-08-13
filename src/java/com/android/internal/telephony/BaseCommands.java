@@ -812,6 +812,9 @@ public abstract class BaseCommands implements CommandsInterface {
         }
     }
 
+    public void sendSMSExpectMore (String smscPDU, String pdu, Message result) {
+    }
+
     protected void onRadioAvailable() {
     }
 
