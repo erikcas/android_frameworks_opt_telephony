@@ -404,10 +404,26 @@ public class DctController extends Handler {
                 if (requestInfo.executedPhoneId != INVALID_PHONE_INDEX) continue;
                 if (getRequestPhoneId(requestInfo.request) == requestedPhoneId) {
                     mDcSwitchAsyncChannel[requestedPhoneId].connect(requestInfo);
+                    Phone phone = mPhones[requestedPhoneId].getActivePhone();
+                    if ((phone.getPhoneType() == PhoneConstants.PHONE_TYPE_CDMA)
+                            && (activePhoneId == -1)) {
+                        /* Traditionally modem reports data registered on CDMA sub even when it is
+                         * non-dds because CDMA network does not have PS ATTACH/DETACH concept.
+                         *
+                         * So when CDMA sub becomes DDS from non-dds the state-machine is expacting
+                         * onDataConnectionAttach() call from serviceStateTracker. It would never
+                         * happen since cdma SST did not notice change in registration during DDS
+                         * switch.
+                         *
+                         * Hence we need to fake the ATTACH to move/progress DcSwitchStateMachine.
+                         */
+                        logd("Active phone is CDMA, fake ATTACH");
+                        mDcSwitchAsyncChannel[requestedPhoneId].notifyDataAttached();
+                    }
+
                 }
             }
         } else {
-            // otherwise detatch so we can try connecting to the high-priority phone
             mDcSwitchAsyncChannel[activePhoneId].disconnectAll();
         }
     }
