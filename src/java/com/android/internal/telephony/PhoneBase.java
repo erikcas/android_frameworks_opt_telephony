@@ -2533,7 +2533,9 @@ public abstract class PhoneBase extends Handler implements Phone {
         mRadioCapability.set(rc);
 
         if (SubscriptionManager.isValidSubscriptionId(getSubId())) {
-            sendSubscriptionSettings(true);
+            boolean restoreSelection = !mContext.getResources().getBoolean(
+                com.android.internal.R.bool.skip_restoring_network_selection);
+            sendSubscriptionSettings(restoreSelection);
         }
     }
 
