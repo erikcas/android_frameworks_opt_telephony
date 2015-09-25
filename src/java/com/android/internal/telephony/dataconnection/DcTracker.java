@@ -1184,7 +1184,7 @@ public final class DcTracker extends DcTrackerBase {
 
     @Override
     protected boolean isPermanentFail(DcFailCause dcFailCause) {
-        return (dcFailCause.isPermanentFail() &&
+        return (dcFailCause.isPermanentFail(mPhone.getContext(), mPhone.getSubId()) &&
                 (mAttached.get() == false || dcFailCause != DcFailCause.SIGNAL_LOST));
     }
 
