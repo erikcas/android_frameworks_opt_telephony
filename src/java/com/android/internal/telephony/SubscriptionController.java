@@ -1402,6 +1402,8 @@ public class SubscriptionController extends ISub.Stub {
     @Override
     public void setDefaultDataSubId(int subId) {
         enforceModifyPhoneState("setDefaultDataSubId");
+        String flexMapSupportType =
+                SystemProperties.get("persist.radio.flexmap_type", "nw_mode");
 
         if (subId == SubscriptionManager.DEFAULT_SUBSCRIPTION_ID) {
             throw new RuntimeException("setDefaultDataSubId called with DEFAULT_SUB_ID");
