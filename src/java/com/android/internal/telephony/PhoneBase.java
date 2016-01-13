@@ -2847,6 +2847,11 @@ public abstract class PhoneBase extends Handler implements Phone {
         }
     }
 
+    @Override
+    public void setBroadcastEmergencyCallStateChanges(boolean broadcast) {
+        mBroadcastEmergencyCallStateChanges = broadcast;
+    }
+
     public void dump(FileDescriptor fd, PrintWriter pw, String[] args) {
         pw.println("PhoneBase: subId=" + getSubId());
         pw.println(" mPhoneId=" + mPhoneId);

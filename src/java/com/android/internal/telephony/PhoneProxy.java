@@ -1702,6 +1702,11 @@ public class PhoneProxy extends Handler implements Phone {
                 commandInterfaceServiceClass, timerSeconds, onComplete);
     }
 
+    @Override
+    public void setBroadcastEmergencyCallStateChanges(boolean broadcast) {
+        mActivePhone.setBroadcastEmergencyCallStateChanges(broadcast);
+    }
+
     public void dump(FileDescriptor fd, PrintWriter pw, String[] args) {
         try {
             ((PhoneBase)mActivePhone).dump(fd, pw, args);
