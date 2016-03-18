@@ -812,6 +812,9 @@ public abstract class BaseCommands implements CommandsInterface {
         }
     }
 
+    public void sendSMSExpectMore (String smscPDU, String pdu, Message result) {
+    }
+
     protected void onRadioAvailable() {
     }
 
@@ -910,4 +913,25 @@ public abstract class BaseCommands implements CommandsInterface {
           mLceInfoRegistrant = null;
       }
     }
+
+    @Override
+    public void setLocalCallHold(boolean lchStatus) {
+    }
+
+    @Override
+    public void iccOpenLogicalChannel(String AID, Message response) {}
+
+    @Override
+    public void iccCloseLogicalChannel(int channel, Message response) {}
+
+    @Override
+    public void iccTransmitApduLogicalChannel(int channel, int cla, int instruction,
+                                              int p1, int p2, int p3, String data,
+                                              Message response) {}
+    @Override
+    public void iccTransmitApduBasicChannel(int cla, int instruction, int p1, int p2,
+                                            int p3, String data, Message response) {}
+
+    @Override
+    public void getAtr(Message response) {}
 }

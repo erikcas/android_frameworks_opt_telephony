@@ -57,6 +57,7 @@ import com.android.internal.telephony.EventLogTags;
 import com.android.internal.telephony.Phone;
 import com.android.internal.telephony.PhoneBase;
 import com.android.internal.telephony.PhoneConstants;
+import com.android.internal.telephony.PhoneFactory;
 import com.android.internal.telephony.uicc.IccRecords;
 import com.android.internal.telephony.uicc.UiccController;
 import com.android.internal.util.AsyncChannel;
@@ -719,6 +720,8 @@ public abstract class DcTrackerBase extends Handler {
 
         Context c = mPhone.getContext();
         String[] apnArrayData = c.getResources().getStringArray(R.array.config_tether_apndata);
+        if (apnArrayData == null) return null;
+
         for (String apn : apnArrayData) {
             ApnSetting dunSetting = ApnSetting.fromString(apn);
             if (dunSetting != null) {
@@ -829,7 +832,9 @@ public abstract class DcTrackerBase extends Handler {
     public void setDataEnabled(boolean enable) {
         Message msg = obtainMessage(DctConstants.CMD_SET_USER_DATA_ENABLE);
         msg.arg1 = enable ? 1 : 0;
-        if (DBG) log("setDataEnabled: sendMessage: enable=" + enable);
+        msg.arg2 = mPhone.getSubId();
+        if (DBG) log("setDataEnabled: sendMessage: enable=" + enable +
+                ", subId=" + mPhone.getSubId());
         sendMessage(msg);
     }
 
@@ -884,7 +889,7 @@ public abstract class DcTrackerBase extends Handler {
     protected abstract void onCleanUpConnection(boolean tearDown, int apnId, String reason);
     protected abstract void onCleanUpAllConnections(String cause);
     public abstract boolean isDataPossible(String apnType);
-    protected abstract void onUpdateIcc();
+    protected abstract boolean onUpdateIcc();
     protected abstract void completeConnection(ApnContext apnContext);
     public abstract void setDataAllowed(boolean enable, Message response);
     public abstract String[] getPcscfAddress(String apnType);
@@ -980,8 +985,9 @@ public abstract class DcTrackerBase extends Handler {
             }
             case DctConstants.CMD_SET_USER_DATA_ENABLE: {
                 final boolean enabled = (msg.arg1 == DctConstants.ENABLED) ? true : false;
-                if (DBG) log("CMD_SET_USER_DATA_ENABLE enabled=" + enabled);
-                onSetUserDataEnabled(enabled);
+                final int subId = msg.arg2;
+                if (DBG) log("CMD_SET_USER_DATA_ENABLE enabled=" + enabled + ", subId=" + subId);
+                onSetUserDataEnabled(enabled, subId);
                 break;
             }
             case DctConstants.CMD_SET_DEPENDENCY_MET: {
@@ -1371,6 +1377,10 @@ public abstract class DcTrackerBase extends Handler {
     public abstract boolean isDisconnected();
 
     protected void onSetUserDataEnabled(boolean enabled) {
+        onSetUserDataEnabled(enabled, mPhone.getSubId());
+    }
+
+    protected void onSetUserDataEnabled(boolean enabled, int subId) {
         synchronized (mDataEnabledLock) {
             if (mUserDataEnabled != enabled) {
                 mUserDataEnabled = enabled;
@@ -1379,8 +1389,7 @@ public abstract class DcTrackerBase extends Handler {
                 if (TelephonyManager.getDefault().getSimCount() == 1) {
                     Settings.Global.putInt(mResolver, Settings.Global.MOBILE_DATA, enabled ? 1 : 0);
                 } else {
-                    int phoneSubId = mPhone.getSubId();
-                    Settings.Global.putInt(mResolver, Settings.Global.MOBILE_DATA + phoneSubId,
+                    Settings.Global.putInt(mResolver, Settings.Global.MOBILE_DATA + subId,
                             enabled ? 1 : 0);
                 }
                 if (getDataOnRoamingEnabled() == false &&
@@ -1657,7 +1666,7 @@ public abstract class DcTrackerBase extends Handler {
             mSentSinceLastRecv = 0;
             putRecoveryAction(RecoveryAction.GET_DATA_CALL_LIST);
         } else if (sent > 0 && received == 0) {
-            if (mPhone.getState() == PhoneConstants.State.IDLE) {
+            if (isPhoneStateIdle()) {
                 mSentSinceLastRecv += sent;
             } else {
                 mSentSinceLastRecv = 0;
@@ -1673,6 +1682,17 @@ public abstract class DcTrackerBase extends Handler {
         } else {
             if (VDBG_STALL) log("updateDataStallInfo: NONE");
         }
+    }
+
+    private boolean isPhoneStateIdle() {
+        for (int i = 0; i < TelephonyManager.getDefault().getPhoneCount(); i++ ) {
+            Phone phone = PhoneFactory.getPhone(i);
+            if (phone != null && phone.getState() != PhoneConstants.State.IDLE) {
+                log("isPhoneStateIdle: Voice call active on sub: " + i);
+                return false;
+            }
+        }
+        return true;
     }
 
     protected void onDataStallAlarm(int tag) {
@@ -1767,18 +1787,23 @@ public abstract class DcTrackerBase extends Handler {
     }
 
     protected void setInitialAttachApn() {
+        setInitialAttachApn(mAllApnSettings, mPreferredApn);
+    }
+
+    protected void setInitialAttachApn(ArrayList <ApnSetting> apnList,
+            ApnSetting preferredApn) {
         ApnSetting iaApnSetting = null;
         ApnSetting defaultApnSetting = null;
         ApnSetting firstApnSetting = null;
 
-        log("setInitialApn: E mPreferredApn=" + mPreferredApn);
+        log("setInitialApn: E preferredApn=" + preferredApn);
 
-        if (mAllApnSettings != null && !mAllApnSettings.isEmpty()) {
-            firstApnSetting = mAllApnSettings.get(0);
+        if (apnList != null && !apnList.isEmpty()) {
+            firstApnSetting = apnList.get(0);
             log("setInitialApn: firstApnSetting=" + firstApnSetting);
 
             // Search for Initial APN setting and the first apn that can handle default
-            for (ApnSetting apn : mAllApnSettings) {
+            for (ApnSetting apn : apnList) {
                 // Can't use apn.canHandleType(), as that returns true for APNs that have no type.
                 if (ArrayUtils.contains(apn.types, PhoneConstants.APN_TYPE_IA) &&
                         apn.carrierEnabled) {
@@ -1805,9 +1830,9 @@ public abstract class DcTrackerBase extends Handler {
         if (iaApnSetting != null) {
             if (DBG) log("setInitialAttachApn: using iaApnSetting");
             initialAttachApnSetting = iaApnSetting;
-        } else if (mPreferredApn != null) {
-            if (DBG) log("setInitialAttachApn: using mPreferredApn");
-            initialAttachApnSetting = mPreferredApn;
+        } else if (preferredApn != null) {
+            if (DBG) log("setInitialAttachApn: using preferredApn");
+            initialAttachApnSetting = preferredApn;
         } else if (defaultApnSetting != null) {
             if (DBG) log("setInitialAttachApn: using defaultApnSetting");
             initialAttachApnSetting = defaultApnSetting;

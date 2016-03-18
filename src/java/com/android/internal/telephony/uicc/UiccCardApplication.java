@@ -26,6 +26,7 @@ import android.telephony.Rlog;
 
 import com.android.internal.telephony.CommandsInterface;
 import com.android.internal.telephony.PhoneConstants;
+import com.android.internal.telephony.TelephonyPluginDelegate;
 import com.android.internal.telephony.uicc.IccCardApplicationStatus.AppState;
 import com.android.internal.telephony.uicc.IccCardApplicationStatus.AppType;
 import com.android.internal.telephony.uicc.IccCardApplicationStatus.PersoSubState;
@@ -146,7 +147,7 @@ public class UiccCardApplication {
             }
 
             if (mPersoSubState != oldPersoSubState &&
-                    mPersoSubState == PersoSubState.PERSOSUBSTATE_SIM_NETWORK) {
+                    isPersoLocked()) {
                 notifyNetworkLockedRegistrantsIfNeeded(null);
             }
 
@@ -178,7 +179,7 @@ public class UiccCardApplication {
 
     private IccRecords createIccRecords(AppType type, Context c, CommandsInterface ci) {
         if (type == AppType.APPTYPE_USIM || type == AppType.APPTYPE_SIM) {
-            return new SIMRecords(this, c, ci);
+            return TelephonyPluginDelegate.getInstance().makeSIMRecords(this, c, ci);
         } else if (type == AppType.APPTYPE_RUIM || type == AppType.APPTYPE_CSIM){
             return new RuimRecords(this, c, ci);
         } else if (type == AppType.APPTYPE_ISIM) {
@@ -384,7 +385,7 @@ public class UiccCardApplication {
                     // request has completed. ar.userObj is the response Message
                     int attemptsRemaining = -1;
                     ar = (AsyncResult)msg.obj;
-                    if ((ar.exception != null) && (ar.result != null)) {
+                    if (ar.result != null) {
                         attemptsRemaining = parsePinPukErrorResult(ar);
                     }
                     Message response = (Message)ar.userObj;
@@ -420,6 +421,14 @@ public class UiccCardApplication {
 
     public void registerForReady(Handler h, int what, Object obj) {
         synchronized (mLock) {
+            for (int i = mReadyRegistrants.size() - 1; i >= 0 ; i--) {
+                Registrant  r = (Registrant) mReadyRegistrants.get(i);
+                Handler rH = r.getHandler();
+
+                if (rH != null && rH == h) {
+                    return;
+                }
+            }
             Registrant r = new Registrant (h, what, obj);
             mReadyRegistrants.add(r);
             notifyReadyRegistrantsIfNeeded(r);
@@ -532,13 +541,14 @@ public class UiccCardApplication {
         }
 
         if (mAppState == AppState.APPSTATE_SUBSCRIPTION_PERSO &&
-                mPersoSubState == PersoSubState.PERSOSUBSTATE_SIM_NETWORK) {
+                isPersoLocked()) {
+            AsyncResult ar = new AsyncResult(null, mPersoSubState.ordinal(), null);
             if (r == null) {
                 if (DBG) log("Notifying registrants: NETWORK_LOCKED");
-                mNetworkLockedRegistrants.notifyRegistrants();
+                mNetworkLockedRegistrants.notifyRegistrants(ar);
             } else {
                 if (DBG) log("Notifying 1 registrant: NETWORK_LOCED");
-                r.notifyRegistrant(new AsyncResult(null, null, null));
+                r.notifyRegistrant(ar);
             }
         }
     }
@@ -625,6 +635,17 @@ public class UiccCardApplication {
         }
     }
 
+    public boolean isPersoLocked() {
+        switch (mPersoSubState) {
+            case PERSOSUBSTATE_UNKNOWN:
+            case PERSOSUBSTATE_IN_PROGRESS:
+            case PERSOSUBSTATE_READY:
+                return false;
+            default:
+                return true;
+        }
+    }
+
     /**
      * Supply the ICC PIN to the ICC
      *
@@ -694,10 +715,10 @@ public class UiccCardApplication {
         }
     }
 
-    public void supplyNetworkDepersonalization (String pin, Message onComplete) {
+    public void supplyNetworkDepersonalization (String pin, String type, Message onComplete) {
         synchronized (mLock) {
-            if (DBG) log("supplyNetworkDepersonalization");
-            mCi.supplyNetworkDepersonalization(pin, onComplete);
+            if (DBG) log("Network Despersonalization: pin = **** , type = " + type);
+            mCi.supplyNetworkDepersonalization(pin, type, onComplete);
         }
     }
 

@@ -73,14 +73,17 @@ public class PhoneProxy extends Handler implements Phone {
 
     private int mRilVersion;
 
-    private static final int EVENT_VOICE_RADIO_TECH_CHANGED = 1;
+    protected static final int EVENT_VOICE_RADIO_TECH_CHANGED = 1;
     private static final int EVENT_RADIO_ON = 2;
-    private static final int EVENT_REQUEST_VOICE_RADIO_TECH_DONE = 3;
-    private static final int EVENT_RIL_CONNECTED = 4;
+    protected static final int EVENT_REQUEST_VOICE_RADIO_TECH_DONE = 3;
+    protected static final int EVENT_RIL_CONNECTED = 4;
     private static final int EVENT_UPDATE_PHONE_OBJECT = 5;
+    private static final int EVENT_SIM_RECORDS_LOADED = 6;
+    private static final int EVENT_RADIO_AVAILABLE = 7;
+    protected static final int EVENT_RADIO_UNAVAILABLE = 8;
     private static final int EVENT_CARRIER_CONFIG_CHANGED = 6;
 
-    private int mPhoneId = 0;
+    protected int mPhoneId = 0;
 
     private Context mContext;
     private BroadcastReceiver mPhoneProxyReceiver = new BroadcastReceiver() {
@@ -106,13 +109,19 @@ public class PhoneProxy extends Handler implements Phone {
 
         mCommandsInterface.registerForRilConnected(this, EVENT_RIL_CONNECTED, null);
         mCommandsInterface.registerForOn(this, EVENT_RADIO_ON, null);
+        mCommandsInterface.registerForAvailable(this, EVENT_RADIO_AVAILABLE, null);
         mCommandsInterface.registerForVoiceRadioTechChanged(
                              this, EVENT_VOICE_RADIO_TECH_CHANGED, null);
+        mCommandsInterface.registerForNotAvailable(this, EVENT_RADIO_UNAVAILABLE, null);
         mPhoneId = phone.getPhoneId();
         mIccSmsInterfaceManager =
                 new IccSmsInterfaceManager((PhoneBase)this.mActivePhone);
         mContext = mActivePhone.getContext();
         mIccCardProxy = new IccCardProxy(mContext, mCommandsInterface, mActivePhone.getPhoneId());
+
+        IntentFilter intentFilter =
+                new IntentFilter(CarrierConfigManager.ACTION_CARRIER_CONFIG_CHANGED);
+        mActivePhone.getContext().registerReceiver(sConfigChangeReceiver, intentFilter);
 
         if (phone.getPhoneType() == PhoneConstants.PHONE_TYPE_GSM) {
             // For the purpose of IccCardProxy we only care about the technology family
@@ -125,10 +134,23 @@ public class PhoneProxy extends Handler implements Phone {
                 CarrierConfigManager.ACTION_CARRIER_CONFIG_CHANGED));
     }
 
+    private final BroadcastReceiver sConfigChangeReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            logd("Carrier config changed. Reloading config");
+            if (intent.getAction().equals(CarrierConfigManager.ACTION_CARRIER_CONFIG_CHANGED)) {
+                mCommandsInterface.getVoiceRadioTechnology(
+                        obtainMessage(EVENT_REQUEST_VOICE_RADIO_TECH_DONE));
+            }
+        }
+    };
+
     @Override
     public void handleMessage(Message msg) {
         AsyncResult ar = (AsyncResult) msg.obj;
         switch(msg.what) {
+        case EVENT_RADIO_AVAILABLE:
+            // intentional fall through.
         case EVENT_RADIO_ON:
             /* Proactively query voice radio technologies */
             mCommandsInterface.getVoiceRadioTechnology(
@@ -185,21 +207,22 @@ public class PhoneProxy extends Handler implements Phone {
         super.handleMessage(msg);
     }
 
-    private static void logd(String msg) {
+    protected void logd(String msg) {
         Rlog.d(LOG_TAG, "[PhoneProxy] " + msg);
     }
 
-    private void loge(String msg) {
+    protected void loge(String msg) {
         Rlog.e(LOG_TAG, "[PhoneProxy] " + msg);
     }
 
-    private void phoneObjectUpdater(int newVoiceRadioTech) {
+    protected void phoneObjectUpdater(int newVoiceRadioTech) {
         logd("phoneObjectUpdater: newVoiceRadioTech=" + newVoiceRadioTech);
 
         if (mActivePhone != null) {
             // Check for a voice over lte replacement
-            if ((newVoiceRadioTech == ServiceState.RIL_RADIO_TECHNOLOGY_LTE)
-                    || (newVoiceRadioTech == ServiceState.RIL_RADIO_TECHNOLOGY_UNKNOWN)) {
+            if ((newVoiceRadioTech == ServiceState.RIL_RADIO_TECHNOLOGY_LTE) ||
+                    (newVoiceRadioTech == ServiceState.RIL_RADIO_TECHNOLOGY_LTE_CA) ||
+                    (newVoiceRadioTech == ServiceState.RIL_RADIO_TECHNOLOGY_UNKNOWN)) {
                 CarrierConfigManager configMgr = (CarrierConfigManager)
                         mActivePhone.getContext().getSystemService(Context.CARRIER_CONFIG_SERVICE);
                 PersistableBundle b = configMgr.getConfigForSubId(mActivePhone.getSubId());
@@ -796,6 +819,11 @@ public class PhoneProxy extends Handler implements Phone {
     }
 
     @Override
+    public void addParticipant(String dialString) throws CallStateException {
+        mActivePhone.addParticipant(dialString);
+    }
+
+    @Override
     public boolean handlePinMmi(String dialString) {
         return mActivePhone.handlePinMmi(dialString);
     }
@@ -1382,7 +1410,12 @@ public class PhoneProxy extends Handler implements Phone {
 
     @Override
     public void dispose() {
+        if (mActivePhone != null) {
+            mActivePhone.unregisterForSimRecordsLoaded(this);
+            mActivePhone.getContext().unregisterReceiver(sConfigChangeReceiver);
+        }
         mCommandsInterface.unregisterForOn(this);
+        mCommandsInterface.unregisterForAvailable(this);
         mCommandsInterface.unregisterForVoiceRadioTechChanged(this);
         mCommandsInterface.unregisterForRilConnected(this);
         mContext.unregisterReceiver(mPhoneProxyReceiver);
@@ -1639,6 +1672,22 @@ public class PhoneProxy extends Handler implements Phone {
         return mActivePhone.isWifiCallingEnabled();
     }
 
+    @Override
+    public void getCallForwardingOption(int commandInterfaceCFReason,
+            int commandInterfaceServiceClass, Message onComplete) {
+        mActivePhone.getCallForwardingOption(commandInterfaceCFReason,
+                commandInterfaceServiceClass, onComplete);
+    }
+
+    @Override
+    public void setCallForwardingOption(int commandInterfaceCFReason,
+            int commandInterfaceCFAction, String dialingNumber,
+            int commandInterfaceServiceClass, int timerSeconds, Message onComplete) {
+        mActivePhone.setCallForwardingOption(commandInterfaceCFReason,
+                commandInterfaceCFAction, dialingNumber,
+                commandInterfaceServiceClass, timerSeconds, onComplete);
+    }
+
     public void dump(FileDescriptor fd, PrintWriter pw, String[] args) {
         try {
             ((PhoneBase)mActivePhone).dump(fd, pw, args);
@@ -1663,5 +1712,26 @@ public class PhoneProxy extends Handler implements Phone {
         }
         pw.flush();
         pw.println("++++++++++++++++++++++++++++++++");
+    }
+
+    @Override
+    public void getCallBarringOption(String facility, String password, Message onComplete) {
+        mActivePhone.getCallBarringOption(facility, password, onComplete);
+    }
+
+    @Override
+    public void setCallBarringOption(String facility, boolean lockState, String password,
+            Message onComplete) {
+        mActivePhone.setCallBarringOption(facility, lockState, password, onComplete);
+    }
+
+    @Override
+    public void requestChangeCbPsw(String facility, String oldPwd, String newPwd, Message result) {
+        mActivePhone.requestChangeCbPsw(facility, oldPwd, newPwd, result);
+    }
+
+    @Override
+    public void setLocalCallHold(boolean lchStatus) {
+        mActivePhone.setLocalCallHold(lchStatus);
     }
 }

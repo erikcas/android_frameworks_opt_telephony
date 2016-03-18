@@ -59,9 +59,11 @@ import android.util.TimeUtils;
 
 import com.android.internal.telephony.CommandException;
 import com.android.internal.telephony.CommandsInterface;
+import com.android.internal.telephony.ConfigResourceUtil;
 import com.android.internal.telephony.EventLogTags;
 import com.android.internal.telephony.ICarrierConfigLoader;
 import com.android.internal.telephony.MccTable;
+import com.android.internal.telephony.PhoneConstants;
 import com.android.internal.telephony.ProxyController;
 import com.android.internal.telephony.Phone;
 import com.android.internal.telephony.RILConstants;
@@ -91,20 +93,23 @@ import java.util.TimeZone;
 /**
  * {@hide}
  */
-final class GsmServiceStateTracker extends ServiceStateTracker {
+public class GsmServiceStateTracker extends ServiceStateTracker {
     static final String LOG_TAG = "GsmSST";
     static final boolean VDBG = false;
     //CAF_MSIM make it private ??
     private static final int EVENT_ALL_DATA_DISCONNECTED = 1001;
-    private GSMPhone mPhone;
-    GsmCellLocation mCellLoc;
-    GsmCellLocation mNewCellLoc;
+    protected GSMPhone mPhone;
+    protected GsmCellLocation mCellLoc;
+    protected GsmCellLocation mNewCellLoc;
     int mPreferredNetworkType;
 
     private int mMaxDataCalls = 1;
-    private int mNewMaxDataCalls = 1;
+    protected int mNewMaxDataCalls = 1;
     private int mReasonDataDenied = -1;
-    private int mNewReasonDataDenied = -1;
+    protected int mNewReasonDataDenied = -1;
+
+    private static final String ACTION_MANAGED_ROAMING_IND =
+            "codeaurora.intent.action.ACTION_MANAGED_ROAMING_IND";
 
     /**
      * GSM roaming status solely based on TS 27.007 7.2 CREG. Only used by
@@ -116,12 +121,12 @@ final class GsmServiceStateTracker extends ServiceStateTracker {
      * Data roaming status solely based on TS 27.007 10.1.19 CGREG. Only used by
      * handlePollStateResult to store CGREG roaming result.
      */
-    private boolean mDataRoaming = false;
+    protected boolean mDataRoaming = false;
 
     /**
      * Mark when service state is in emergency call only mode
      */
-    private boolean mEmergencyOnly = false;
+    protected boolean mEmergencyOnly = false;
 
     /**
      * Sometimes we get the NITZ time before we know what country we
@@ -152,6 +157,8 @@ final class GsmServiceStateTracker extends ServiceStateTracker {
      * The Notification object given to the NotificationManager.
      */
     private Notification mNotification;
+
+    private ConfigResourceUtil mConfigResUtil = new ConfigResourceUtil();
 
     /** Wake lock used while setting time of day. */
     private PowerManager.WakeLock mWakeLock;
@@ -593,8 +600,9 @@ final class GsmServiceStateTracker extends ServiceStateTracker {
         String plmn = null;
         boolean showPlmn = false;
         int rule = (iccRecords != null) ? iccRecords.getDisplayRule(mSS.getOperatorNumeric()) : 0;
-        if (mSS.getVoiceRegState() == ServiceState.STATE_OUT_OF_SERVICE
-                || mSS.getVoiceRegState() == ServiceState.STATE_EMERGENCY_ONLY) {
+        int combinedRegState = getCombinedRegState();
+        if (combinedRegState == ServiceState.STATE_OUT_OF_SERVICE
+                || combinedRegState == ServiceState.STATE_EMERGENCY_ONLY) {
             showPlmn = true;
             if (mEmergencyOnly) {
                 // No service but emergency call allowed
@@ -607,7 +615,7 @@ final class GsmServiceStateTracker extends ServiceStateTracker {
             }
             if (DBG) log("updateSpnDisplay: radio is on but out " +
                     "of service, set plmn='" + plmn + "'");
-        } else if (mSS.getVoiceRegState() == ServiceState.STATE_IN_SERVICE) {
+        } else if (combinedRegState == ServiceState.STATE_IN_SERVICE) {
             // In either home or roaming service
             plmn = mSS.getOperatorAlphaLong();
             showPlmn = !TextUtils.isEmpty(plmn) &&
@@ -656,6 +664,13 @@ final class GsmServiceStateTracker extends ServiceStateTracker {
         int[] subIds = SubscriptionManager.getSubId(mPhone.getPhoneId());
         if (subIds != null && subIds.length > 0) {
             subId = subIds[0];
+        }
+        spn = maybeUpdateHDTagForSpn(showSpn, spn);
+        plmn = maybeUpdateHDTagForPlmn(showPlmn, plmn);
+
+        if (mConfigResUtil.getBooleanValue(mPhone.getContext(), "config_spn_display_control")) {
+            // Control not to show SPN.
+            showSpn = false;
         }
 
         // Update SPN_STRINGS_UPDATED_ACTION IFF any value changes
@@ -733,6 +748,7 @@ final class GsmServiceStateTracker extends ServiceStateTracker {
                     int regState = ServiceState.RIL_REG_STATE_UNKNOWN;
                     int reasonRegStateDenied = -1;
                     int psc = -1;
+                    int cssIndicator = 0;
                     if (states.length > 0) {
                         try {
                             regState = Integer.parseInt(states[0]);
@@ -749,6 +765,9 @@ final class GsmServiceStateTracker extends ServiceStateTracker {
                                     type = Integer.parseInt(states[3]);
                                 }
                             }
+                            if (states.length >= 8 && (states[7] != null)) {
+                                cssIndicator = Integer.parseInt(states[7]);
+                            }
                             if (states.length > 14) {
                                 if (states[14] != null && states[14].length() > 0) {
                                     psc = Integer.parseInt(states[14], 16);
@@ -762,6 +781,27 @@ final class GsmServiceStateTracker extends ServiceStateTracker {
                     mGsmRoaming = regCodeIsRoaming(regState);
                     mNewSS.setState(regCodeToServiceState(regState));
                     mNewSS.setRilVoiceRadioTechnology(type);
+                    mNewSS.setCssIndicator(cssIndicator);
+
+                    if ((regState == ServiceState.RIL_REG_STATE_DENIED
+                            || regState == ServiceState.RIL_REG_STATE_DENIED_EMERGENCY_CALL_ENABLED)
+                            && (states.length >= 14)) {
+                        try {
+                            int rejCode = Integer.parseInt(states[13]);
+                            // Check if rejCode is "Persistent location update reject",
+                            if (rejCode == 10) {
+                                log(" Posting Managed roaming intent sub = "
+                                        + mPhone.getSubId());
+                                Intent intent =
+                                        new Intent(ACTION_MANAGED_ROAMING_IND);
+                                intent.putExtra(PhoneConstants.SUBSCRIPTION_KEY,
+                                        mPhone.getSubId());
+                                mPhone.getContext().sendBroadcast(intent);
+                            }
+                        } catch (NumberFormatException ex) {
+                            loge("error parsing regCode: " + ex);
+                        }
+                    }
 
                     boolean isVoiceCapable = mPhoneBase.getContext().getResources()
                             .getBoolean(com.android.internal.R.bool.config_voice_capable);
@@ -1030,7 +1070,7 @@ final class GsmServiceStateTracker extends ServiceStateTracker {
         }
     }
 
-    private void pollStateDone() {
+    protected void pollStateDone() {
         if (Build.IS_DEBUGGABLE && SystemProperties.getBoolean(PROP_FORCE_ROAMING, false)) {
             mNewSS.setVoiceRoaming(true);
             mNewSS.setDataRoaming(true);
@@ -1086,6 +1126,8 @@ final class GsmServiceStateTracker extends ServiceStateTracker {
         boolean hasDataRoamingOff = mSS.getDataRoaming() && !mNewSS.getDataRoaming();
 
         boolean hasLocationChanged = !mNewCellLoc.equals(mCellLoc);
+
+        boolean hasCssIndicatorChanged = (mSS.getCssIndicator() != mNewSS.getCssIndicator());
         TelephonyManager tm =
                 (TelephonyManager) mPhone.getContext().getSystemService(Context.TELEPHONY_SERVICE);
 
@@ -1293,10 +1335,11 @@ final class GsmServiceStateTracker extends ServiceStateTracker {
             mPhone.notifyServiceStateChanged(mSS);
         }
 
-        if (hasGprsAttached) {
-            mAttachedRegistrants.notifyRegistrants();
-        }
-
+        // First notify detached, then rat changed, then attached - that's the way it
+        // happens in the modem.
+        // Behavior of recipients (DcTracker, for instance) depends on this sequence
+        // since DcTracker reloads profiles on "rat_changed" notification and sets up
+        // data call on "attached" notification.
         if (hasGprsDetached) {
             mDetachedRegistrants.notifyRegistrants();
         }
@@ -1316,6 +1359,11 @@ final class GsmServiceStateTracker extends ServiceStateTracker {
             mVoiceRoamingOnRegistrants.notifyRegistrants();
         }
 
+        if (hasGprsAttached) {
+            mAttachedRegistrants.notifyRegistrants();
+        }
+
+
         if (hasVoiceRoamingOff) {
             mVoiceRoamingOffRegistrants.notifyRegistrants();
         }
@@ -1330,6 +1378,10 @@ final class GsmServiceStateTracker extends ServiceStateTracker {
 
         if (hasLocationChanged) {
             mPhone.notifyLocationChanged();
+        }
+
+        if (hasCssIndicatorChanged) {
+            mPhone.notifyDataConnection(Phone.REASON_CSS_INDICATOR_CHANGED);
         }
 
         if (! isGprsConsistent(mSS.getDataRegState(), mSS.getVoiceRegState())) {
@@ -1509,7 +1561,7 @@ final class GsmServiceStateTracker extends ServiceStateTracker {
     }
 
     /** code is registration state 0-5 from TS 27.007 7.2 */
-    private int regCodeToServiceState(int code) {
+    protected int regCodeToServiceState(int code) {
         switch (code) {
             case 0:
             case 2: // 2 is "searching"
@@ -1539,7 +1591,7 @@ final class GsmServiceStateTracker extends ServiceStateTracker {
      * code is registration state 0-5 from TS 27.007 7.2
      * returns true if registered roam, false otherwise
      */
-    private boolean regCodeIsRoaming (int code) {
+    protected boolean regCodeIsRoaming (int code) {
         return ServiceState.RIL_REG_STATE_ROAMING == code;
     }
 
@@ -1644,11 +1696,16 @@ final class GsmServiceStateTracker extends ServiceStateTracker {
 
     /**
      * @return true if phone is camping on a technology (eg UMTS)
-     * that could support voice and data simultaneously.
+     * that could support voice and data simultaneously or
+     * concurrent services support indicator is set to '1'.
      */
     @Override
     public boolean isConcurrentVoiceAndDataAllowed() {
-        return (mSS.getRilVoiceRadioTechnology() >= ServiceState.RIL_RADIO_TECHNOLOGY_UMTS);
+        if (mSS.getRilDataRadioTechnology() >= ServiceState.RIL_RADIO_TECHNOLOGY_UMTS) {
+            return true;
+        } else {
+            return mSS.getCssIndicator() == 1;
+        }
     }
 
     /**
@@ -2159,7 +2216,8 @@ final class GsmServiceStateTracker extends ServiceStateTracker {
                 if (dcTracker.isDisconnected()
                         && (dds == mPhone.getSubId()
                             || (dds != mPhone.getSubId()
-                                && ProxyController.getInstance().isDataDisconnected(dds)))) {
+                                && ProxyController.getInstance().isDataDisconnected(dds))
+                            || !SubscriptionManager.isValidSubscriptionId(dds))) {
                     // To minimize race conditions we do this after isDisconnected
                     dcTracker.cleanUpAllConnections(Phone.REASON_RADIO_TURNED_OFF);
                     if (DBG) log("Data disconnected, turn off radio right away.");

@@ -109,11 +109,13 @@ public interface Phone {
     static final String REASON_DATA_DEPENDENCY_UNMET = "dependencyUnmet";
     static final String REASON_LOST_DATA_CONNECTION = "lostDataConnection";
     static final String REASON_CONNECTED = "connected";
+    static final String REASON_NV_READY = "nvReady";
     static final String REASON_SINGLE_PDN_ARBITRATION = "SinglePdnArbitration";
     static final String REASON_DATA_SPECIFIC_DISABLED = "specificDisabled";
     static final String REASON_SIM_NOT_READY = "simNotReady";
     static final String REASON_IWLAN_AVAILABLE = "iwlanAvailable";
     static final String REASON_CARRIER_CHANGE = "carrierChange";
+    static final String REASON_CSS_INDICATOR_CHANGED = "cssIndicatorChanged";
 
     // Used for band mode selection methods
     static final int BM_UNSPECIFIED = 0; // selected by baseband automatically
@@ -143,18 +145,20 @@ public interface Phone {
     int NT_MODE_LTE_ONLY                 = RILConstants.NETWORK_MODE_LTE_ONLY;
     int NT_MODE_LTE_WCDMA                = RILConstants.NETWORK_MODE_LTE_WCDMA;
 
-    int NT_MODE_TDSCDMA_ONLY            = RILConstants.NETWORK_MODE_TDSCDMA_ONLY;
-    int NT_MODE_TDSCDMA_WCDMA           = RILConstants.NETWORK_MODE_TDSCDMA_WCDMA;
-    int NT_MODE_LTE_TDSCDMA             = RILConstants.NETWORK_MODE_LTE_TDSCDMA;
-    int NT_MODE_TDSCDMA_GSM             = RILConstants.NETWORK_MODE_TDSCDMA_GSM;
-    int NT_MODE_LTE_TDSCDMA_GSM         = RILConstants.NETWORK_MODE_LTE_TDSCDMA_GSM;
-    int NT_MODE_TDSCDMA_GSM_WCDMA       = RILConstants.NETWORK_MODE_TDSCDMA_GSM_WCDMA;
-    int NT_MODE_LTE_TDSCDMA_WCDMA       = RILConstants.NETWORK_MODE_LTE_TDSCDMA_WCDMA;
-    int NT_MODE_LTE_TDSCDMA_GSM_WCDMA   = RILConstants.NETWORK_MODE_LTE_TDSCDMA_GSM_WCDMA;
-    int NT_MODE_TDSCDMA_CDMA_EVDO_GSM_WCDMA = RILConstants.NETWORK_MODE_TDSCDMA_CDMA_EVDO_GSM_WCDMA;
-    int NT_MODE_LTE_TDSCDMA_CDMA_EVDO_GSM_WCDMA = RILConstants.NETWORK_MODE_LTE_TDSCDMA_CDMA_EVDO_GSM_WCDMA;
-
     int PREFERRED_NT_MODE                = RILConstants.PREFERRED_NETWORK_MODE;
+
+    int NT_MODE_TD_SCDMA_ONLY            = RILConstants.NETWORK_MODE_TD_SCDMA_ONLY;
+    int NT_MODE_TD_SCDMA_WCDMA           = RILConstants.NETWORK_MODE_TD_SCDMA_WCDMA;
+    int NT_MODE_TD_SCDMA_LTE             = RILConstants.NETWORK_MODE_TD_SCDMA_LTE;
+    int NT_MODE_TD_SCDMA_GSM             = RILConstants.NETWORK_MODE_TD_SCDMA_GSM;
+    int NT_MODE_TD_SCDMA_GSM_LTE         = RILConstants.NETWORK_MODE_TD_SCDMA_GSM_LTE;
+    int NT_MODE_TD_SCDMA_GSM_WCDMA       = RILConstants.NETWORK_MODE_TD_SCDMA_GSM_WCDMA;
+    int NT_MODE_TD_SCDMA_WCDMA_LTE       = RILConstants.NETWORK_MODE_TD_SCDMA_WCDMA_LTE;
+    int NT_MODE_TD_SCDMA_GSM_WCDMA_LTE   = RILConstants.NETWORK_MODE_TD_SCDMA_GSM_WCDMA_LTE;
+    int NT_MODE_TD_SCDMA_GSM_WCDMA_CDMA_EVDO =
+            RILConstants.NETWORK_MODE_TD_SCDMA_GSM_WCDMA_CDMA_EVDO;
+    int NT_MODE_TD_SCDMA_LTE_CDMA_EVDO_GSM_WCDMA =
+            RILConstants.NETWORK_MODE_TD_SCDMA_LTE_CDMA_EVDO_GSM_WCDMA;
 
     // Used for CDMA roaming mode
     static final int CDMA_RM_HOME        = 0;  // Home Networks only, as defined in PRL
@@ -891,6 +895,19 @@ public interface Phone {
      */
     Connection dial(String dialString, UUSInfo uusInfo, int videoState, Bundle intentExtras)
             throws CallStateException;
+
+    /**
+     * Initiate to add a participant in an IMS call.
+     * This happens asynchronously, so you cannot assume the audio path is
+     * connected (or a call index has been assigned) until PhoneStateChanged
+     * notification has occurred.
+     *
+     * @exception CallStateException if a new outgoing call is not currently
+     *                possible because no more call slots exist or a call exists
+     *                that is dialing, alerting, ringing, or waiting. Other
+     *                errors are handled asynchronously.
+     */
+    public void addParticipant(String dialString) throws CallStateException;
 
     /**
      * Handles PIN MMI commands (PIN/PIN2/PUK/PUK2), which are initiated
@@ -1857,6 +1874,22 @@ public interface Phone {
     void removeReferences();
 
     /**
+     * Query call barring option from network
+     */
+    void getCallBarringOption(String facility, String password, Message onComplete);
+
+    /**
+     * Set user desired call barring option
+     */
+    void setCallBarringOption(String facility, boolean lockState, String password,
+            Message onComplete);
+
+    /**
+     * Request to change call barring password
+     */
+    void requestChangeCbPsw(String facility, String oldPwd, String newPwd, Message result);
+
+    /**
      * Update the phone object if the voice radio technology has changed
      *
      * @param voiceRadioTech The new voice radio technology
@@ -2098,4 +2131,52 @@ public interface Phone {
      * Returns the modem activity information
      */
     public void getModemActivityInfo(Message response);
+
+    /** Request to update the current local call hold state.
+     * @param lchStatus, true if call is in lch state
+     */
+    public void setLocalCallHold(boolean lchStatus);
+
+    /**
+     * getCallForwardingOption
+     * gets a call forwarding option. The return value of
+     * ((AsyncResult)onComplete.obj) is an array of CallForwardInfo.
+     *
+     * @param commandInterfaceCFReason is one of the valid call forwarding
+     *        CF_REASONS, as defined in
+     *        <code>com.android.internal.telephony.CommandsInterface.</code>
+     * @param commandInterfaceServiceClass is one of the valid supplementary
+     *        service class SERVICE_CLASS_* as defined in
+     *        <code>com.android.internal.telephony.CommandsInterface.</code>
+     * @param onComplete a callback message when the action is completed.
+     *        @see com.android.internal.telephony.CallForwardInfo for details.
+     */
+    void getCallForwardingOption(int commandInterfaceCFReason,
+                                 int commandInterfaceServiceClass,
+                                 Message onComplete);
+
+    /**
+     * setCallForwardingOption
+     * sets a call forwarding option.
+     *
+     * @param commandInterfaceCFReason is one of the valid call forwarding
+     *        CF_REASONS, as defined in
+     *        <code>com.android.internal.telephony.CommandsInterface.</code>
+     * @param commandInterfaceCFAction is one of the valid call forwarding
+     *        CF_ACTIONS, as defined in
+     *        <code>com.android.internal.telephony.CommandsInterface.</code>
+     * @param dialingNumber is the target phone number to forward calls to
+     * @param commandInterfaceServiceClass is one of the valid supplementary
+     *        service class SERVICE_CLASS_* as defined in
+     *        <code>com.android.internal.telephony.CommandsInterface.</code>
+     * @param timerSeconds is used by CFNRy to indicate the timeout before
+     *        forwarding is attempted.
+     * @param onComplete a callback message when the action is completed.
+     */
+    void setCallForwardingOption(int commandInterfaceCFReason,
+                                 int commandInterfaceCFAction,
+                                 String dialingNumber,
+                                 int commandInterfaceServiceClass,
+                                 int timerSeconds,
+                                 Message onComplete);
 }

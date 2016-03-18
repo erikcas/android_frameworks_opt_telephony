@@ -29,6 +29,7 @@ import android.telephony.ServiceState;
 import android.telephony.SmsManager;
 import android.telephony.TelephonyManager;
 
+import com.android.internal.telephony.ConfigResourceUtil;
 import com.android.internal.telephony.GsmAlphabet;
 import com.android.internal.telephony.ImsSMSDispatcher;
 import com.android.internal.telephony.PhoneBase;
@@ -47,6 +48,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class CdmaSMSDispatcher extends SMSDispatcher {
     private static final String TAG = "CdmaSMSDispatcher";
     private static final boolean VDBG = false;
+    private ConfigResourceUtil mConfigResUtil = new ConfigResourceUtil();
 
     public CdmaSMSDispatcher(PhoneBase phone, SmsUsageMonitor usageMonitor,
             ImsSMSDispatcher imsSMSDispatcher) {
@@ -140,13 +142,14 @@ public class CdmaSMSDispatcher extends SMSDispatcher {
     @Override
     protected void sendText(String destAddr, String scAddr, String text, PendingIntent sentIntent,
             PendingIntent deliveryIntent, Uri messageUri, String callingPkg,
-            boolean persistMessage) {
+            boolean persistMessage, int priority, boolean isExpectMore, int validityPeriod) {
         SmsMessage.SubmitPdu pdu = SmsMessage.getSubmitPdu(
-                scAddr, destAddr, text, (deliveryIntent != null), null);
+                scAddr, destAddr, text, (deliveryIntent != null), null, priority);
         if (pdu != null) {
             HashMap map = getSmsTrackerMap(destAddr, scAddr, text, pdu);
             SmsTracker tracker = getSmsTracker(map, sentIntent, deliveryIntent, getFormat(),
-                    messageUri, false /*isExpectMore*/, text, true /*isText*/, persistMessage);
+                    messageUri, isExpectMore, text, true /*isText*/, validityPeriod,
+                    persistMessage);
 
             String carrierPackage = getCarrierAppPackageName();
             if (carrierPackage != null) {
@@ -187,6 +190,7 @@ public class CdmaSMSDispatcher extends SMSDispatcher {
     protected SmsTracker getNewSubmitPduTracker(String destinationAddress, String scAddress,
             String message, SmsHeader smsHeader, int encoding,
             PendingIntent sentIntent, PendingIntent deliveryIntent, boolean lastPart,
+            int priority, boolean isExpectMore, int validityPeriod,
             AtomicInteger unsentPartCount, AtomicBoolean anyPartFailed, Uri messageUri,
             String fullMessageText) {
         UserData uData = new UserData();
@@ -194,6 +198,12 @@ public class CdmaSMSDispatcher extends SMSDispatcher {
         uData.userDataHeader = smsHeader;
         if (encoding == SmsConstants.ENCODING_7BIT) {
             uData.msgEncoding = UserData.ENCODING_GSM_7BIT_ALPHABET;
+            boolean ascii7bitForLongMsg = mConfigResUtil.getBooleanValue(mContext,
+                    "config_ascii_7bit_support_for_long_message");
+            if (ascii7bitForLongMsg) {
+                Rlog.d(TAG, "ascii7bitForLongMsg = " + ascii7bitForLongMsg);
+                uData.msgEncoding = UserData.ENCODING_7BIT_ASCII;
+            }
         } else { // assume UTF-16
             uData.msgEncoding = UserData.ENCODING_UNICODE_16;
         }
@@ -204,13 +214,13 @@ public class CdmaSMSDispatcher extends SMSDispatcher {
          * callback to the sender when that last fragment delivery
          * has been acknowledged. */
         SmsMessage.SubmitPdu submitPdu = SmsMessage.getSubmitPdu(destinationAddress,
-                uData, (deliveryIntent != null) && lastPart);
+                uData, (deliveryIntent != null) && lastPart, priority);
 
         HashMap map = getSmsTrackerMap(destinationAddress, scAddress,
                 message, submitPdu);
         return getSmsTracker(map, sentIntent, deliveryIntent,
                 getFormat(), unsentPartCount, anyPartFailed, messageUri, smsHeader,
-                false /*isExpextMore*/, fullMessageText, true /*isText*/,
+                (!lastPart || isExpectMore), fullMessageText, true /*isText*/, validityPeriod,
                 true /*persistMessage*/);
     }
 
@@ -259,7 +269,7 @@ public class CdmaSMSDispatcher extends SMSDispatcher {
 
         int currentDataNetwork = mPhone.getServiceState().getDataNetworkType();
         boolean imsSmsDisabled = (currentDataNetwork == TelephonyManager.NETWORK_TYPE_EHRPD
-                    || (currentDataNetwork == TelephonyManager.NETWORK_TYPE_LTE
+                    || (mPhone.getServiceStateTracker().isRatLte(currentDataNetwork)
                     && !mPhone.getServiceStateTracker().isConcurrentVoiceAndDataAllowed()))
                     && mPhone.getServiceState().getVoiceNetworkType()
                     == TelephonyManager.NETWORK_TYPE_1xRTT
@@ -269,9 +279,19 @@ public class CdmaSMSDispatcher extends SMSDispatcher {
         //   if sms over IMS is not supported AND
         //   this is not a retry case after sms over IMS failed
         //     indicated by mImsRetry > 0
-        if (0 == tracker.mImsRetry && !isIms() || imsSmsDisabled) {
+        if (0 == tracker.mImsRetry && !isIms()) {
             mCi.sendCdmaSms(pdu, reply);
-        } else {
+        }
+        // If sending SMS over IMS is not enabled, send SMS over cdma. Simply
+        // calling shouldSendSmsOverIms() to check for that here might yield a
+        // different result if the conditions of UE being attached to eHRPD and
+        // active 1x voice call have changed since we last called it in
+        // ImsSMSDispatcher.isCdmaMo()
+        else if (!mImsSMSDispatcher.isImsSmsEnabled()) {
+            mCi.sendCdmaSms(pdu, reply);
+            mImsSMSDispatcher.enableSendSmsOverIms(true);
+        }
+        else {
             mCi.sendImsCdmaSms(pdu, tracker.mImsRetry, tracker.mMessageRef, reply);
             // increment it here, so in case of SMS_FAIL_RETRY over IMS
             // next retry will be sent using IMS request again.

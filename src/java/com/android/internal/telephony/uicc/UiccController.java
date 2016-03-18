@@ -27,9 +27,12 @@ import android.telephony.TelephonyManager;
 import android.telephony.Rlog;
 import android.text.format.Time;
 
+import android.telephony.ServiceState;
+
 import com.android.internal.telephony.CommandsInterface;
 import com.android.internal.telephony.PhoneConstants;
 import com.android.internal.telephony.SubscriptionController;
+import com.android.internal.telephony.uicc.IccCardApplicationStatus.AppState;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
@@ -79,6 +82,7 @@ public class UiccController extends Handler {
     private static final boolean DBG = true;
     private static final String LOG_TAG = "UiccController";
 
+    public static final int APP_FAM_UNKNOWN =  -1;
     public static final int APP_FAM_3GPP =  1;
     public static final int APP_FAM_3GPP2 = 2;
     public static final int APP_FAM_IMS   = 3;
@@ -121,12 +125,7 @@ public class UiccController extends Handler {
         for (int i = 0; i < mCis.length; i++) {
             Integer index = new Integer(i);
             mCis[i].registerForIccStatusChanged(this, EVENT_ICC_STATUS_CHANGED, index);
-            // TODO remove this once modem correctly notifies the unsols
-            if (DECRYPT_STATE.equals(SystemProperties.get("vold.decrypt"))) {
-                mCis[i].registerForAvailable(this, EVENT_ICC_STATUS_CHANGED, index);
-            } else {
-                mCis[i].registerForOn(this, EVENT_ICC_STATUS_CHANGED, index);
-            }
+            mCis[i].registerForAvailable(this, EVENT_ICC_STATUS_CHANGED, index);
             mCis[i].registerForNotAvailable(this, EVENT_RADIO_UNAVAILABLE, index);
             mCis[i].registerForIccRefresh(this, EVENT_SIM_REFRESH, index);
         }
@@ -182,6 +181,18 @@ public class UiccController extends Handler {
     }
 
 
+    public static int getFamilyFromRadioTechnology(int radioTechnology) {
+        if (ServiceState.isGsm(radioTechnology) ||
+                radioTechnology == ServiceState.RIL_RADIO_TECHNOLOGY_EHRPD) {
+            return  UiccController.APP_FAM_3GPP;
+        } else if (ServiceState.isCdma(radioTechnology)) {
+            return  UiccController.APP_FAM_3GPP2;
+        } else {
+            // If it is UNKNOWN rat
+            return UiccController.APP_FAM_UNKNOWN;
+        }
+    }
+
     //Notifies when card status changes
     public void registerForIccChanged(Handler h, int what, Object obj) {
         synchronized (mLock) {
@@ -229,7 +240,11 @@ public class UiccController extends Handler {
                     break;
                 case EVENT_SIM_REFRESH:
                     if (DBG) log("Received EVENT_SIM_REFRESH");
-                    onSimRefresh(ar, index);
+                    if (ar.exception == null) {
+                        onSimRefresh(ar, index);
+                    } else  {
+                        log ("Exception on refresh " + ar.exception);
+                    }
                     break;
                 default:
                     Rlog.e(LOG_TAG, " Unknown Event " + msg.what);
@@ -312,30 +327,39 @@ public class UiccController extends Handler {
 
         IccRefreshResponse resp = (IccRefreshResponse) ar.result;
         Rlog.d(LOG_TAG, "onSimRefresh: " + resp);
-
+  
+        if (resp == null) {
+            Rlog.e(LOG_TAG, "onSimRefresh: received without input");
+            return;
+        }    
+      
         if (mUiccCards[index] == null) {
             Rlog.e(LOG_TAG,"onSimRefresh: refresh on null card : " + index);
             return;
         }
 
-        if (resp.refreshResult != IccRefreshResponse.REFRESH_RESULT_RESET) {
-          Rlog.d(LOG_TAG, "Ignoring non reset refresh: " + resp);
-          return;
+        Rlog.d(LOG_TAG, "Handling refresh: " + resp);
+        
+        boolean changed = false;
+        switch(resp.refreshResult) {
+            case IccRefreshResponse.REFRESH_RESULT_RESET:
+            case IccRefreshResponse.REFRESH_RESULT_INIT:
+                 // Reset the required apps when we know about the refresh so that
+                 // anyone interested does not get stale state.
+                 changed = mUiccCards[index].resetAppWithAid(resp.aid);
+                 break;
         }
 
-        Rlog.d(LOG_TAG, "Handling refresh reset: " + resp);
-
-        boolean changed = mUiccCards[index].resetAppWithAid(resp.aid);
-        if (changed) {
+        if (changed && resp.refreshResult == IccRefreshResponse.REFRESH_RESULT_RESET) {
             boolean requirePowerOffOnSimRefreshReset = mContext.getResources().getBoolean(
                 com.android.internal.R.bool.config_requireRadioPowerOffOnSimRefreshReset);
             if (requirePowerOffOnSimRefreshReset) {
                 mCis[index].setRadioPower(false, null);
-            } else {
-                mCis[index].getIccCardStatus(obtainMessage(EVENT_GET_ICC_STATUS_DONE));
-            }
-            mIccChangedRegistrants.notifyRegistrants(new AsyncResult(null, index, null));
+            }   
         }
+
+        // The card status could have changed. Get the latest state.
+        mCis[index].getIccCardStatus(obtainMessage(EVENT_GET_ICC_STATUS_DONE));
     }
 
     private boolean isValidCardIndex(int index) {

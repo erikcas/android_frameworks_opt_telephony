@@ -32,6 +32,8 @@ import android.os.Looper;
 import android.os.Message;
 import android.os.Registrant;
 import android.os.RegistrantList;
+import android.os.RemoteException;
+import android.os.ServiceManager;
 import android.os.SystemProperties;
 import android.preference.PreferenceManager;
 import android.provider.Settings;
@@ -45,6 +47,7 @@ import android.telephony.Rlog;
 import android.telephony.ServiceState;
 import android.telephony.SignalStrength;
 import android.telephony.SubscriptionManager;
+import android.telephony.TelephonyManager;
 import android.telephony.VoLteServiceState;
 import android.telephony.ModemActivityInfo;
 import android.text.TextUtils;
@@ -72,6 +75,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
+
+import org.codeaurora.QtiVideoCallConstants;
 
 /**
  * (<em>Not for SDK use</em>)
@@ -115,6 +120,10 @@ public abstract class PhoneBase extends Handler implements Phone {
             }
         }
     };
+    /**
+     * Indicates whether Out Of Service is considered as data call disconnect.
+     */
+    public static final String PROPERTY_OOS_IS_DISCONNECT = "persist.telephony.oosisdc";
 
     // Key used to read and write the saved network selection numeric value
     public static final String NETWORK_SELECTION_KEY = "network_selection_key";
@@ -173,8 +182,9 @@ public abstract class PhoneBase extends Handler implements Phone {
     protected static final int EVENT_SS                             = 36;
     protected static final int EVENT_CONFIG_LCE                     = 37;
     private static final int EVENT_CHECK_FOR_NETWORK_AUTOMATIC      = 38;
+    protected static final int EVENT_GET_CALLFORWARDING_STATUS      = 39;
     protected static final int EVENT_LAST                           =
-            EVENT_CHECK_FOR_NETWORK_AUTOMATIC;
+            EVENT_GET_CALLFORWARDING_STATUS;
 
     // For shared prefs.
     private static final String GSM_ROAMING_LIST_OVERRIDE_PREFIX = "gsm_roaming_list_";
@@ -189,6 +199,15 @@ public abstract class PhoneBase extends Handler implements Phone {
     public static final String VM_COUNT = "vm_count_key";
     // Key used to read/write the ID for storing the voice mail
     public static final String VM_ID = "vm_id_key";
+
+    // Key used to read/write the SIM IMSI used for storing the imsi
+    public static final String SIM_IMSI = "sim_imsi_key";
+    // Key used to read/write SIM IMSI used for storing the imsi
+    public static final String VM_SIM_IMSI = "vm_sim_imsi_key";
+    // Key used to read/write if Call Forwarding is enabled
+    public static final String CF_ENABLED = "cf_enabled_key";
+    // Key used to read/write if Video Call Forwarding is enabled
+    public static final String CF_ENABLED_VIDEO = "cf_enabled_key_video";
 
     // Key used for storing call forwarding status
     public static final String CF_STATUS = "cf_status_key";
@@ -242,7 +261,7 @@ public abstract class PhoneBase extends Handler implements Phone {
     private boolean mImsServiceReady = false;
     protected ImsPhone mImsPhone = null;
 
-    private final AtomicReference<RadioCapability> mRadioCapability =
+    protected final AtomicReference<RadioCapability> mRadioCapability =
             new AtomicReference<RadioCapability>();
 
     protected static final int DEFAULT_REPORT_INTERVAL_MS = 200;
@@ -280,6 +299,10 @@ public abstract class PhoneBase extends Handler implements Phone {
     public String getActionAttached() {
         return mActionAttached;
     }
+
+    // Flag that indicates that Out Of Service is considered as data call disconnect
+    protected boolean mOosIsDisconnect = SystemProperties.getBoolean(
+            PROPERTY_OOS_IS_DISCONNECT, true);
 
     /**
      * Set a system property, unless we're in unit test mode
@@ -480,6 +503,7 @@ public abstract class PhoneBase extends Handler implements Phone {
         mCi.setOnUnsolOemHookRaw(this, EVENT_UNSOL_OEM_HOOK_RAW, null);
         mCi.startLceService(DEFAULT_REPORT_INTERVAL_MS, LCE_PULL_MODE,
                 obtainMessage(EVENT_CONFIG_LCE));
+        Rlog.d(LOG_TAG, "mOosIsDisconnect=" + mOosIsDisconnect);
     }
 
     @Override
@@ -1024,26 +1048,30 @@ public abstract class PhoneBase extends Handler implements Phone {
                 // send the setting on error
             }
         }
-
-        // wrap the response message in our own message along with
-        // an empty string (to indicate automatic selection) for the
-        // operator's id.
-        NetworkSelectMessage nsm = new NetworkSelectMessage();
-        nsm.message = response;
-        nsm.operatorNumeric = "";
-        nsm.operatorAlphaLong = "";
-        nsm.operatorAlphaShort = "";
-
         if (doAutomatic) {
+            // wrap the response message in our own message along with
+            // an empty string (to indicate automatic selection) for the
+            // operator's id.
+            NetworkSelectMessage nsm = new NetworkSelectMessage();
+            nsm.message = response;
+            nsm.operatorNumeric = "";
+            nsm.operatorAlphaLong = "";
+            nsm.operatorAlphaShort = "";
+
             Message msg = obtainMessage(EVENT_SET_NETWORK_AUTOMATIC_COMPLETE, nsm);
             mCi.setNetworkSelectionModeAutomatic(msg);
+
+            updateSavedNetworkOperator(nsm);
         } else {
             Rlog.d(LOG_TAG, "setNetworkSelectionModeAutomatic - already auto, ignoring");
-            ar.userObj = nsm;
-            handleSetSelectNetwork(ar);
+            // since the Network selection mode is already set to
+            // automatic, sendresponse with the result considering
+            // it as successful for those expecting it.
+            if (response != null) {
+                AsyncResult.forMessage(response, null, null);
+                response.sendToTarget();
+            }
         }
-
-        updateSavedNetworkOperator(nsm);
     }
 
     @Override
@@ -1063,7 +1091,12 @@ public abstract class PhoneBase extends Handler implements Phone {
         nsm.operatorAlphaShort = network.getOperatorAlphaShort();
 
         Message msg = obtainMessage(EVENT_SET_NETWORK_MANUAL_COMPLETE, nsm);
-        mCi.setNetworkSelectionModeManual(network.getOperatorNumeric(), msg);
+        if (network.getRadioTech().equals("")) {
+            mCi.setNetworkSelectionModeManual(network.getOperatorNumeric(), msg);
+        } else {
+            mCi.setNetworkSelectionModeManual(network.getOperatorNumeric()
+                    + "+" + network.getRadioTech(), msg);
+        }
 
         if (persistSelection) {
             updateSavedNetworkOperator(nsm);
@@ -1343,6 +1376,13 @@ public abstract class PhoneBase extends Handler implements Phone {
         return fh;
     }
 
+    /**
+     * Retrieves the IccRecords of the Phone instance
+     */
+    public IccRecords getIccRecords() {
+        return mIccRecords.get();
+    }
+
     /*
      * Retrieves the Handler of the Phone instance
      */
@@ -1352,8 +1392,12 @@ public abstract class PhoneBase extends Handler implements Phone {
 
     @Override
     public void updatePhoneObject(int voiceRadioTech) {
+        Rlog.d(LOG_TAG, "updatePhoneObject: phoneid = " + mPhoneId + " rat = " + voiceRadioTech);
         // Only the PhoneProxy can update the phone object.
-        PhoneFactory.getDefaultPhone().updatePhoneObject(voiceRadioTech);
+        Phone phoneProxy = PhoneFactory.getPhone(mPhoneId);
+        if (phoneProxy != null) {
+            phoneProxy.updatePhoneObject(voiceRadioTech);
+        }
     }
 
     /**
@@ -1484,13 +1528,20 @@ public abstract class PhoneBase extends Handler implements Phone {
 
     public void setVoiceCallForwardingFlag(int line, boolean enable, String number) {
         setCallForwardingIndicatorInSharedPref(enable);
-        mIccRecords.get().setVoiceCallForwardingFlag(line, enable, number);
+        IccRecords r = mIccRecords.get();
+        if (r != null) {
+            r.setVoiceCallForwardingFlag(line, enable, number);
+        }
     }
 
     protected void setVoiceCallForwardingFlag(IccRecords r, int line, boolean enable,
                                               String number) {
         setCallForwardingIndicatorInSharedPref(enable);
         r.setVoiceCallForwardingFlag(line, enable, number);
+    }
+
+    public int getVoiceCallForwardingFlag() {
+        return getCallForwardingIndicatorFromSharedPref();
     }
 
     @Override
@@ -1504,6 +1555,161 @@ public abstract class PhoneBase extends Handler implements Phone {
             callForwardingIndicator = getCallForwardingIndicatorFromSharedPref();
         }
         return (callForwardingIndicator == IccRecords.CALL_FORWARDING_STATUS_ENABLED);
+    }
+
+    /**
+     * This method stores the CF_ENABLED flag in preferences
+     * @param enabled
+     */
+    public void setCallForwardingPreference(boolean enabled) {
+        Rlog.d(LOG_TAG, "Set callforwarding info to perferences");
+        SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(mContext);
+        SharedPreferences.Editor edit = sp.edit();
+        edit.putBoolean(CF_ENABLED + getSubId(), enabled);
+        edit.commit();
+
+        // set the sim imsi to be able to track when the sim card is changed.
+        setSimImsi(getSubscriberId());
+    }
+
+    public boolean getCallForwardingPreference() {
+        Rlog.d(LOG_TAG, "Get callforwarding info from perferences");
+
+        if (!isCurrentSubValid()) {
+            return false;
+        }
+
+        SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(mContext);
+        boolean cf = false;
+        // Migrate CF enabled flag from phoneid based preference to subId based.
+        boolean needMigration = false;
+        String oldCfKey = null;
+        if (TelephonyManager.getDefault().isMultiSimEnabled()) {
+            if (!sp.contains(CF_ENABLED + getSubId()) && sp.contains(CF_ENABLED + mPhoneId)) {
+                oldCfKey = CF_ENABLED + mPhoneId;
+                needMigration = true;
+            }
+        } else {
+            if (!sp.contains(CF_ENABLED + getSubId()) && sp.contains(CF_ENABLED)) {
+                oldCfKey = CF_ENABLED;
+                needMigration = true;
+            }
+        }
+        if (needMigration) {
+            // Save cf flag based on subId and remove old preference
+            cf = sp.getBoolean(oldCfKey, false);
+            setCallForwardingPreference(cf);
+            SharedPreferences.Editor edit = sp.edit();
+            edit.remove(oldCfKey);
+            edit.commit();
+            return cf;
+        }
+        cf = sp.getBoolean(CF_ENABLED + getSubId(), false);
+        return cf;
+    }
+
+    /**
+     * This method stores the CF_ENABLED_VIDEO flag in preferences
+     * @param enabled
+     */
+    public void setVideoCallForwardingPreference(boolean enabled) {
+        Rlog.d(LOG_TAG, "Set video call forwarding info to preferences");
+        SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(mContext);
+        SharedPreferences.Editor edit = sp.edit();
+        edit.putBoolean(CF_ENABLED_VIDEO + getSubId(), enabled);
+        edit.commit();
+
+        // set the sim imsi to be able to track when the sim card is changed.
+        setSimImsi(getSubscriberId());
+    }
+
+    /**
+     * This method gets Video Call Forwarding enabled/disabled from preferences
+     */
+    public boolean getVideoCallForwardingPreference() {
+        Rlog.d(LOG_TAG, "Get video call forwarding info from preferences");
+
+        SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(mContext);
+        boolean cf = false;
+        if (TelephonyManager.getDefault().isMultiSimEnabled()) {
+            if (!sp.contains(CF_ENABLED_VIDEO + getSubId()) &&
+                    sp.contains(CF_ENABLED_VIDEO + mPhoneId)) {
+                cf = sp.getBoolean(CF_ENABLED_VIDEO + mPhoneId, false);
+                setVideoCallForwardingPreference(cf);
+                SharedPreferences.Editor edit = sp.edit();
+                edit.remove(CF_ENABLED_VIDEO + mPhoneId);
+                edit.commit();
+            }
+        } else {
+            if (!sp.contains(CF_ENABLED_VIDEO + getSubId()) && sp.contains(CF_ENABLED_VIDEO)) {
+                cf = sp.getBoolean(CF_ENABLED_VIDEO, false);
+                setVideoCallForwardingPreference(cf);
+                SharedPreferences.Editor edit = sp.edit();
+                edit.remove(CF_ENABLED_VIDEO);
+                edit.commit();
+            }
+        }
+        cf = sp.getBoolean(CF_ENABLED_VIDEO + getSubId(), false);
+        return cf;
+    }
+
+    public String getSimImsi() {
+        SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(getContext());
+        boolean needMigration = false;
+        String oldImsiKey = null;
+        if (TelephonyManager.getDefault().isMultiSimEnabled()) {
+            //Migrate sim_imsi value for msim
+            if (!sp.contains(SIM_IMSI + getSubId()) && sp.contains(VM_SIM_IMSI + mPhoneId)) {
+                oldImsiKey = VM_SIM_IMSI + mPhoneId;
+                needMigration = true;
+            }
+        } else {
+            //Migrate sim_imsi value for single sim
+            if (!sp.contains(SIM_IMSI + getSubId()) && sp.contains(VM_SIM_IMSI)) {
+                oldImsiKey = VM_SIM_IMSI;
+                needMigration = true;
+            }
+        }
+        if (needMigration) {
+            // Save imsi based on subId and remove old preference
+            String imsi = sp.getString(oldImsiKey, null);
+            setSimImsi(imsi);
+            SharedPreferences.Editor editor = sp.edit();
+            editor.remove(oldImsiKey);
+            editor.commit();
+            return imsi;
+        }
+        return sp.getString(SIM_IMSI + getSubId(), null);
+    }
+
+    public void setSimImsi(String imsi) {
+        SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(getContext());
+        SharedPreferences.Editor editor = sp.edit();
+        editor.putString(SIM_IMSI + getSubId(), imsi);
+        editor.apply();
+    }
+
+    private boolean isCurrentSubValid() {
+        final int PROVISIONED = 1;
+        final int INVALID_STATE = -1;
+        int provisionStatus = PROVISIONED;
+        SubscriptionManager subscriptionManager = SubscriptionManager.from(mContext);
+        IExtTelephony mExtTelephony = IExtTelephony.Stub.
+                asInterface(ServiceManager.getService("extphone"));
+        if (TelephonyManager.getDefault().isMultiSimEnabled()) {
+            try {
+                //get current provision state of the SIM.
+                provisionStatus =
+                        mExtTelephony.getCurrentUiccCardProvisioningStatus(mPhoneId);
+            } catch (RemoteException ex) {
+                provisionStatus = INVALID_STATE;
+            } catch (NullPointerException ex) {
+                provisionStatus = INVALID_STATE;
+            }
+        }
+        Rlog.d(LOG_TAG, "ProvisionStatus: " + provisionStatus);
+        return subscriptionManager.isActiveSubId(getSubId()) &&
+                (provisionStatus == PROVISIONED);
     }
 
     /**
@@ -1569,6 +1775,12 @@ public abstract class PhoneBase extends Handler implements Phone {
         int filteredRaf = (rafFromType & modemRaf);
         int filteredType = RadioAccessFamily.getNetworkTypeFromRaf(filteredRaf);
 
+        // The getNetworkTypeFromRaf, has no way to differentiate between MODE_GSM_UMTS
+        // and MODE_WCDMA_PREF since they have the same raf. So check for it explicitly
+        if (networkType == RILConstants.NETWORK_MODE_GSM_UMTS &&
+                filteredType == RILConstants.NETWORK_MODE_WCDMA_PREF) {
+            filteredType = RILConstants.NETWORK_MODE_GSM_UMTS;
+        }
         Rlog.d(LOG_TAG, "setPreferredNetworkType: networkType = " + networkType
                 + " modemRaf = " + modemRaf
                 + " rafFromType = " + rafFromType
@@ -2595,6 +2807,12 @@ public abstract class PhoneBase extends Handler implements Phone {
         return getLocaleFromCarrierProperties(mContext);
     }
 
+    /* Validate the given extras if the call is for CS domain or not */
+    protected boolean shallDialOnCircuitSwitch(Bundle extras) {
+            return (extras != null && extras.getInt(QtiVideoCallConstants.EXTRA_CALL_DOMAIN,
+                    QtiVideoCallConstants.DOMAIN_AUTOMATIC) == QtiVideoCallConstants.DOMAIN_CS);
+    }
+
     protected boolean isMatchGid(String gid) {
         String gid1 = getGroupIdLevel1();
         int gidLength = gid.length();
@@ -2603,6 +2821,19 @@ public abstract class PhoneBase extends Handler implements Phone {
             return true;
         }
         return false;
+    }
+
+    @Override
+    public void getCallForwardingOption(int commandInterfaceCFReason,
+            int commandInterfaceServiceClass, Message onComplete) {
+        logUnexpectedCdmaMethodCall("getCallForwardingOption with Serviceclass");
+    }
+
+    @Override
+    public void setCallForwardingOption(int commandInterfaceCFReason,
+            int commandInterfaceCFAction, String dialingNumber,
+            int commandInterfaceServiceClass, int timerSeconds, Message onComplete) {
+        logUnexpectedCdmaMethodCall("setCallForwardingOption with Serviceclass");
     }
 
     public void dump(FileDescriptor fd, PrintWriter pw, String[] args) {
@@ -2676,5 +2907,29 @@ public abstract class PhoneBase extends Handler implements Phone {
         }
         pw.flush();
         pw.println("++++++++++++++++++++++++++++++++");
+    }
+
+    public void getCallBarringOption(String facility, String password, Message onComplete) {
+        logUnexpectedCdmaMethodCall("getCallBarringOption");
+    }
+
+    public void setCallBarringOption(String facility, boolean lockState, String password,
+            Message onComplete) {
+        logUnexpectedCdmaMethodCall("setCallBarringOption");
+    }
+
+    public void requestChangeCbPsw(String facility, String oldPwd, String newPwd, Message result) {
+        logUnexpectedCdmaMethodCall("requestChangeCbPsw");
+    }
+
+    @Override
+    public void setLocalCallHold(boolean lchStatus) {
+        mCi.setLocalCallHold(lchStatus);
+    }
+
+    @Override
+    public void addParticipant(String dialString) throws CallStateException {
+        throw new CallStateException("addParticipant is not supported in this phone "
+                + this);
     }
 }
