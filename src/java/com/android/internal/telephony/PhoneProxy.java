@@ -1581,7 +1581,7 @@ public class PhoneProxy extends Handler implements Phone {
     }
 
     @Override
-    public RadioCapability getRadioCapability() {
+        public RadioCapability getRadioCapability() {
         return mActivePhone.getRadioCapability();
     }
 
@@ -1683,5 +1683,10 @@ public class PhoneProxy extends Handler implements Phone {
         }
         pw.flush();
         pw.println("++++++++++++++++++++++++++++++++");
+    }
+
+    @Override
+    public void setLocalCallHold(boolean lchStatus) {
+        mActivePhone.setLocalCallHold(lchStatus);
     }
 }

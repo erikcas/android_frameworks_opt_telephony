@@ -29,6 +29,7 @@ import android.net.Uri;
 import android.os.Binder;
 import android.os.RemoteException;
 import android.os.ServiceManager;
+import android.os.SystemProperties;
 import android.os.UserHandle;
 import android.provider.Settings;
 import android.telephony.RadioAccessFamily;
@@ -1402,6 +1403,8 @@ public class SubscriptionController extends ISub.Stub {
     @Override
     public void setDefaultDataSubId(int subId) {
         enforceModifyPhoneState("setDefaultDataSubId");
+        String flexMapSupportType =
+                SystemProperties.get("persist.radio.flexmap_type", "nw_mode");
 
         if (subId == SubscriptionManager.DEFAULT_SUBSCRIPTION_ID) {
             throw new RuntimeException("setDefaultDataSubId called with DEFAULT_SUB_ID");

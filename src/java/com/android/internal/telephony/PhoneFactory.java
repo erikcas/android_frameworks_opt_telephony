@@ -208,7 +208,6 @@ public class PhoneFactory {
                 sSubInfoRecordUpdater = new SubscriptionInfoUpdater(context,
                         sProxyPhones, sCommandsInterfaces);
                 SubscriptionController.getInstance().updatePhonesAvailability(sProxyPhones);
-
                 // Start monitoring after defaults have been made.
                 // Default phone must be ready before ImsPhone is created
                 // because ImsService might need it when it is being opened.

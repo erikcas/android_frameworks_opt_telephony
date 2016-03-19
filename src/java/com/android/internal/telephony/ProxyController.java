@@ -254,6 +254,20 @@ public class ProxyController {
             return true;
         }
 
+        // Proceed with flex map only if both phones have valid RAF/modemUuid values.
+        // Sometimes due to phone object switch existing phone RAF values disposed which can
+        // cause both phoens to link same modemUuid.
+        for (int i = 0; i < mProxyPhones.length; i++) {
+            int raf = mProxyPhones[i].getRadioAccessFamily();
+            String modemUuid = mProxyPhones[i].getModemUuId();
+            if ((raf == RadioAccessFamily.RAF_UNKNOWN) ||
+                     (modemUuid == null) || (modemUuid.length() == 0)) {
+                logd("setRadioCapability: invalid RAF = " + raf + " or modemUuid = " +
+                         modemUuid + " for phone = " + i);
+                return false;
+            }
+        }
+
         // Clear to be sure we're in the initial state
         clearTransaction();
 
@@ -618,6 +632,7 @@ public class ProxyController {
         int maxNumRafBit = 0;
         int maxRaf = RadioAccessFamily.RAF_UNKNOWN;
 
+        int number;
         for (int len = 0; len < mProxyPhones.length; len++) {
             numRafSupported[len] = Integer.bitCount(mProxyPhones[len].getRadioAccessFamily());
             if (maxNumRafBit < numRafSupported[len]) {
@@ -636,6 +651,7 @@ public class ProxyController {
         int minNumRafBit = 0;
         int minRaf = RadioAccessFamily.RAF_UNKNOWN;
 
+        int number;
         for (int len = 0; len < mProxyPhones.length; len++) {
             numRafSupported[len] = Integer.bitCount(mProxyPhones[len].getRadioAccessFamily());
             if ((minNumRafBit == 0) || (minNumRafBit > numRafSupported[len])) {
