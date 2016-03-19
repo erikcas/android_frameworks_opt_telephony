@@ -24,6 +24,7 @@ import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.RemoteException;
 import android.os.SystemProperties;
+import android.provider.Settings;
 import android.telephony.TelephonyManager;
 import android.text.TextUtils;
 import android.util.Slog;
@@ -31,8 +32,11 @@ import android.util.Slog;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+
 import libcore.icu.ICU;
 import libcore.icu.TimeZoneNames;
 
@@ -183,11 +187,8 @@ public final class MccTable {
             }
 
             Slog.d(LOG_TAG, "updateMccMncConfiguration: mcc=" + mcc + ", mnc=" + mnc);
-
-            Locale locale = null;
             if (mcc != 0) {
                 setTimezoneFromMccIfNeeded(context, mcc);
-                locale = getLocaleFromMcc(context, mcc);
             }
             if (fromServiceState) {
                 setWifiCountryCodeFromMcc(context, mcc);
@@ -201,10 +202,7 @@ public final class MccTable {
                         config.mnc = mnc == 0 ? Configuration.MNC_ZERO : mnc;
                         updateConfig = true;
                     }
-                    if (locale != null) {
-                        config.setLocale(locale);
-                        updateConfig = true;
-                    }
+
                     if (updateConfig) {
                         Slog.d(LOG_TAG, "updateMccMncConfiguration updateConfig config=" + config);
                         ActivityManagerNative.getDefault().updateConfiguration(config);
@@ -221,6 +219,64 @@ public final class MccTable {
                 setWifiCountryCodeFromMcc(context, 0);
             }
         }
+    }
+
+    // Bug 19232829: It is possible to get through provisioning without setting up a persistent
+    // locale value. We don't modify the locale if the device has completed "provisioning" because
+    // we don't want to change the locale if the user inserts a new SIM or a new version of Android
+    // is better at recognizing MCC values than an older version.
+    private static boolean canUpdateLocale(Context context) {
+        return !(userHasPersistedLocale() || isDeviceProvisioned(context));
+    }
+
+    private static boolean userHasPersistedLocale() {
+        String persistSysLanguage = SystemProperties.get("persist.sys.language", "");
+        String persistSysCountry = SystemProperties.get("persist.sys.country", "");
+        return !(persistSysLanguage.isEmpty() && persistSysCountry.isEmpty());
+    }
+
+    private static boolean isDeviceProvisioned(Context context) {
+        try {
+            return Settings.Global.getInt(
+                    context.getContentResolver(), Settings.Global.DEVICE_PROVISIONED) != 0;
+        } catch (Settings.SettingNotFoundException e) {
+            return false;
+        }
+    }
+
+    /**
+     * Maps a given locale to a fallback locale that approximates it. This is a hack.
+     */
+    private static final Map<Locale, Locale> FALLBACKS = new HashMap<Locale, Locale>();
+
+    static {
+        FALLBACKS.put(Locale.CANADA, Locale.US);
+    }
+
+    /**
+     * Find the best match we actually have a localization for. This function assumes we
+     * couldn't find an exact match.
+     *
+     * TODO: This should really follow the CLDR chain of parent locales! That might be a bit
+     * of a problem because we don't really have an en-001 locale on android.
+     */
+    private static Locale chooseBestFallback(Locale target, List<Locale> candidates) {
+        if (candidates.isEmpty()) {
+            return null;
+        }
+
+        Locale fallback = target;
+        while ((fallback = FALLBACKS.get(fallback)) != null) {
+            if (candidates.contains(fallback)) {
+                return fallback;
+            }
+        }
+
+        // Somewhat arbitrarily take the first locale for the language,
+        // unless we get a perfect match later. Note that these come back in no
+        // particular order, so there's no reason to think the first match is
+        // a particularly good match.
+        return candidates.get(0);
     }
 
     /**
@@ -242,27 +298,6 @@ public final class MccTable {
             country = ""; // The Locale constructor throws if passed null.
         }
 
-        // Check whether a developer is trying to test an arbitrary MCC.
-        boolean debuggingMccOverride = false;
-        if (Build.IS_DEBUGGABLE) {
-            String overrideMcc = SystemProperties.get("persist.sys.override_mcc", "");
-            if (!overrideMcc.isEmpty()) {
-                debuggingMccOverride = true;
-            }
-        }
-
-        // If this is a regular user and they already have a persisted locale, we're done.
-        if (!debuggingMccOverride) {
-            String persistSysLanguage = SystemProperties.get("persist.sys.language", "");
-            String persistSysCountry = SystemProperties.get("persist.sys.country", "");
-            if (!(persistSysLanguage.isEmpty() && persistSysCountry.isEmpty())) {
-                Slog.d(LOG_TAG, "getLocaleForLanguageCountry: skipping already persisted");
-                return null;
-            }
-        }
-
-        // Find the best match we actually have a localization for.
-        // TODO: this should really follow the CLDR chain of parent locales!
         final Locale target = new Locale(language, country);
         try {
             String[] localeArray = context.getAssets().getLocales();
@@ -272,7 +307,7 @@ public final class MccTable {
             locales.remove("ar-XB");
             locales.remove("en-XA");
 
-            Locale firstMatch = null;
+            List<Locale> languageMatches = new ArrayList<>();
             for (String locale : locales) {
                 final Locale l = Locale.forLanguageTag(locale.replace('_', '-'));
 
@@ -288,22 +323,17 @@ public final class MccTable {
                                l.toLanguageTag());
                         return l;
                     }
-                    // Otherwise somewhat arbitrarily take the first locale for the language,
-                    // unless we get a perfect match later. Note that these come back in no
-                    // particular order, so there's no reason to think the first match is
-                    // a particularly good match.
-                    if (firstMatch == null) {
-                        firstMatch = l;
-                    }
+
+                    // We've only matched the language, not the country.
+                    languageMatches.add(l);
                 }
             }
 
-            // We didn't find the exact locale, so return whichever locale we saw first where
-            // the language matched (if any).
-            if (firstMatch != null) {
+            Locale bestMatch = chooseBestFallback(target, languageMatches);
+            if (bestMatch != null) {
                 Slog.d(LOG_TAG, "getLocaleForLanguageCountry: got a language-only match: " +
-                       firstMatch.toLanguageTag());
-                return firstMatch;
+                       bestMatch.toLanguageTag());
+                return bestMatch;
             } else {
                 Slog.d(LOG_TAG, "getLocaleForLanguageCountry: no locales for language " +
                        language);
@@ -315,29 +345,14 @@ public final class MccTable {
         return null;
     }
 
-    /**
-     * Utility code to set the system locale if it's not set already
-     * @param context Context to act on.
-     * @param language Two character language code desired
-     * @param country Two character country code desired
-     *
-     *  {@hide}
-     */
-    public static void setSystemLocale(Context context, String language, String country) {
-        Locale locale = getLocaleForLanguageCountry(context, language, country);
-        if (locale != null) {
-            Configuration config = new Configuration();
-            config.setLocale(locale);
-            config.userSetLocale = false;
-            Slog.d(LOG_TAG, "setSystemLocale: updateLocale config=" + config);
-            try {
-                ActivityManagerNative.getDefault().updateConfiguration(config);
-            } catch (RemoteException e) {
-                Slog.d(LOG_TAG, "setSystemLocale exception", e);
+    private static boolean isDebuggingMccOverride() {
+        if (Build.IS_DEBUGGABLE) {
+            String overrideMcc = SystemProperties.get("persist.sys.override_mcc", "");
+            if (!overrideMcc.isEmpty()) {
+                return true;
             }
-        } else {
-            Slog.d(LOG_TAG, "setSystemLocale: no locale");
         }
+        return false;
     }
 
     /**
@@ -361,17 +376,29 @@ public final class MccTable {
 
     /**
      * Get Locale based on the MCC of the SIM.
+     *
      * @param context Context to act on.
      * @param mcc Mobile Country Code of the SIM or SIM-like entity (build prop on CDMA)
+     * @param simLanguage (nullable) the language from the SIM records (if present).
      *
      * @return locale for the mcc or null if none
      */
-    private static Locale getLocaleFromMcc(Context context, int mcc) {
-        String language = MccTable.defaultLanguageForMcc(mcc);
+    public static Locale getLocaleFromMcc(Context context, int mcc, String simLanguage) {
+        String language = (simLanguage == null) ? MccTable.defaultLanguageForMcc(mcc) : simLanguage;
         String country = MccTable.countryCodeForMcc(mcc);
 
-        Slog.d(LOG_TAG, "getLocaleFromMcc to " + language + "_" + country + " mcc=" + mcc);
-        return getLocaleForLanguageCountry(context, language, country);
+        Slog.d(LOG_TAG, "getLocaleFromMcc(" + language + ", " + country + ", " + mcc);
+        final Locale locale = getLocaleForLanguageCountry(context, language, country);
+
+        // If we couldn't find a locale that matches the SIM language, give it a go again
+        // with the "likely" language for the given country.
+        if (locale == null && simLanguage != null) {
+            language = MccTable.defaultLanguageForMcc(mcc);
+            Slog.d(LOG_TAG, "[retry ] getLocaleFromMcc(" + language + ", " + country + ", " + mcc);
+            return getLocaleForLanguageCountry(context, null, country);
+        }
+
+        return locale;
     }
 
     /**
@@ -383,10 +410,19 @@ public final class MccTable {
      */
     private static void setWifiCountryCodeFromMcc(Context context, int mcc) {
         String country = MccTable.countryCodeForMcc(mcc);
-        Slog.d(LOG_TAG, "WIFI_COUNTRY_CODE set to " + country);
-        WifiManager wM = (WifiManager) context.getSystemService(Context.WIFI_SERVICE);
-        //persist
-        wM.setCountryCode(country, true);
+        // safe if we need it later
+        Settings.Global.putString(context.getContentResolver(),
+                Settings.Global.WIFI_COUNTRY_CODE_SIM0, country.toUpperCase(Locale.ROOT));
+
+        // dont override by default only if reset == value is null
+        String countryCode = Settings.Global.getString(context.getContentResolver(),
+                Settings.Global.WIFI_COUNTRY_CODE);
+        if(countryCode == null || countryCode.isEmpty()){
+            Slog.i(LOG_TAG, "WIFI_COUNTRY_CODE set to " + country);
+            WifiManager wM = (WifiManager) context.getSystemService(Context.WIFI_SERVICE);
+            //persist
+            wM.setCountryCode(country, true);
+        }
     }
 
     static {
@@ -597,7 +633,7 @@ public final class MccTable {
 		sTable.add(new MccEntry(627,"gq",2));	//Equatorial Guinea (Republic of)
 		sTable.add(new MccEntry(628,"ga",2));	//Gabonese Republic
 		sTable.add(new MccEntry(629,"cg",2));	//Congo (Republic of the)
-		sTable.add(new MccEntry(630,"cg",2));	//Democratic Republic of the Congo
+		sTable.add(new MccEntry(630,"cd",2));	//Democratic Republic of the Congo
 		sTable.add(new MccEntry(631,"ao",2));	//Angola (Republic of)
 		sTable.add(new MccEntry(632,"gw",2));	//Guinea-Bissau (Republic of)
 		sTable.add(new MccEntry(633,"sc",2));	//Seychelles (Republic of)

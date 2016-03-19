@@ -19,6 +19,8 @@ package com.android.internal.telephony.uicc;
 import static android.Manifest.permission.READ_PHONE_STATE;
 import android.app.ActivityManagerNative;
 import android.app.AlertDialog;
+import android.content.ActivityNotFoundException;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
@@ -27,6 +29,7 @@ import android.content.pm.PackageManager;
 import android.content.pm.Signature;
 import android.content.res.Resources;
 import android.os.AsyncResult;
+import android.os.Binder;
 import android.os.Handler;
 import android.os.Message;
 import android.os.PowerManager;
@@ -36,6 +39,7 @@ import android.preference.PreferenceManager;
 import android.telephony.Rlog;
 import android.telephony.TelephonyManager;
 import android.text.TextUtils;
+import android.util.LocalLog;
 import android.view.WindowManager;
 
 import com.android.internal.telephony.CommandsInterface;
@@ -66,6 +70,9 @@ public class UiccCard {
     protected static final String LOG_TAG = "UiccCard";
     protected static final boolean DBG = true;
 
+    public static final String EXTRA_ICC_CARD_ADDED =
+            "com.android.internal.telephony.uicc.ICC_CARD_ADDED";
+
     private static final String OPERATOR_BRAND_OVERRIDE_PREFIX = "operator_branding_";
 
     private final Object mLock = new Object();
@@ -93,6 +100,8 @@ public class UiccCard {
     private static final int EVENT_TRANSMIT_APDU_BASIC_CHANNEL_DONE = 18;
     private static final int EVENT_SIM_IO_DONE = 19;
     private static final int EVENT_CARRIER_PRIVILIGES_LOADED = 20;
+
+    private static final LocalLog mLocalLog = new LocalLog(100);
 
     private int mPhoneId;
 
@@ -295,7 +304,7 @@ public class UiccCard {
     private void onIccSwap(boolean isAdded) {
 
         boolean isHotSwapSupported = mContext.getResources().getBoolean(
-                com.android.internal.R.bool.config_hotswapCapable);
+                R.bool.config_hotswapCapable);
 
         if (isHotSwapSupported) {
             log("onIccSwap: isHotSwapSupported is true, don't prompt for rebooting");
@@ -303,7 +312,26 @@ public class UiccCard {
         }
         log("onIccSwap: isHotSwapSupported is false, prompt for rebooting");
 
+        promptForRestart(isAdded);
+    }
+
+    private void promptForRestart(boolean isAdded) {
         synchronized (mLock) {
+            final Resources res = mContext.getResources();
+            final String dialogComponent = res.getString(
+                    R.string.config_iccHotswapPromptForRestartDialogComponent);
+            if (dialogComponent != null) {
+                Intent intent = new Intent().setComponent(ComponentName.unflattenFromString(
+                        dialogComponent)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        .putExtra(EXTRA_ICC_CARD_ADDED, isAdded);
+                try {
+                    mContext.startActivity(intent);
+                    return;
+                } catch (ActivityNotFoundException e) {
+                    loge("Unable to find ICC hotswap prompt for restart activity: " + e);
+                }
+            }
+
             // TODO: Here we assume the device can't handle SIM hot-swap
             //      and has to reboot. We may want to add a property,
             //      e.g. REBOOT_ON_SIM_SWAP, to indicate if modem support
@@ -364,8 +392,8 @@ public class UiccCard {
                 case EVENT_SIM_IO_DONE:
                     AsyncResult ar = (AsyncResult)msg.obj;
                     if (ar.exception != null) {
-                       if (DBG)
-                         log("Error in SIM access with exception" + ar.exception);
+                        loglocal("Exception: " + ar.exception);
+                        log("Error in SIM access with exception" + ar.exception);
                     }
                     AsyncResult.forMessage((Message)ar.userObj, ar.result, ar.exception);
                     ((Message)ar.userObj).sendToTarget();
@@ -458,25 +486,33 @@ public class UiccCard {
 
     /**
      * Resets the application with the input AID. Returns true if any changes were made.
+     *
+     * A null aid implies a card level reset - all applications must be reset.
      */
     public boolean resetAppWithAid(String aid) {
         synchronized (mLock) {
+            boolean changed = false;
             for (int i = 0; i < mUiccApplications.length; i++) {
-                if (mUiccApplications[i] != null && aid.equals(mUiccApplications[i].getAid())) {
+                if (mUiccApplications[i] != null &&
+                    (aid == null || aid.equals(mUiccApplications[i].getAid()))) {
                     // Delete removed applications
                     mUiccApplications[i].dispose();
                     mUiccApplications[i] = null;
-                    return true;
+                    changed = true;
                 }
             }
-            return false;
+            return changed;
         }
+        // TODO: For a card level notification, we should delete the CarrierPrivilegeRules and the
+        // CAT service.
     }
 
     /**
      * Exposes {@link CommandsInterface.iccOpenLogicalChannel}
      */
     public void iccOpenLogicalChannel(String AID, Message response) {
+        loglocal("Open Logical Channel: " + AID + " by pid:" + Binder.getCallingPid()
+                + " uid:" + Binder.getCallingUid());
         mCi.iccOpenLogicalChannel(AID,
                 mHandler.obtainMessage(EVENT_OPEN_LOGICAL_CHANNEL_DONE, response));
     }
@@ -485,6 +521,7 @@ public class UiccCard {
      * Exposes {@link CommandsInterface.iccCloseLogicalChannel}
      */
     public void iccCloseLogicalChannel(int channel, Message response) {
+        loglocal("Close Logical Channel: " + channel);
         mCi.iccCloseLogicalChannel(channel,
                 mHandler.obtainMessage(EVENT_CLOSE_LOGICAL_CHANNEL_DONE, response));
     }
@@ -633,6 +670,10 @@ public class UiccCard {
         Rlog.e(LOG_TAG, msg);
     }
 
+    private void loglocal(String msg) {
+        if (DBG) mLocalLog.log(msg);
+    }
+
     public void dump(FileDescriptor fd, PrintWriter pw, String[] args) {
         pw.println("UiccCard:");
         pw.println(" mCi=" + mCi);
@@ -692,6 +733,9 @@ public class UiccCard {
             pw.println("  mCarrierPrivilegeRegistrants[" + i + "]="
                     + ((Registrant)mCarrierPrivilegeRegistrants.get(i)).getHandler());
         }
+        pw.flush();
+        pw.println("mLocalLog:");
+        mLocalLog.dump(fd, pw, args);
         pw.flush();
     }
 }

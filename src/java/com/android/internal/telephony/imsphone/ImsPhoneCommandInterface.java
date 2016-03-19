@@ -608,4 +608,23 @@ class ImsPhoneCommandInterface extends BaseCommands implements CommandsInterface
     @Override
     public void getRadioCapability(Message response) {
     }
+
+    @Override
+    public boolean needsOldRilFeature(String feature) { return false; }
+
+    @Override
+    public void startLceService(int reportIntervalMs, boolean pullMode, Message result) {
+    }
+
+    @Override
+    public void stopLceService(Message result) {
+    }
+
+    @Override
+    public void pullLceData(Message result) {
+    }
+
+    @Override
+    public void getModemActivityInfo(Message result) {
+    }
 }

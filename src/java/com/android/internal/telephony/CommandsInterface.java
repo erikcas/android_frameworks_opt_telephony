@@ -1898,11 +1898,6 @@ public interface CommandsInterface {
      */
     int getRilVersion();
 
-    /**
-     * @return Radio access families supported by the hardware.
-     */
-    int getSupportedRadioAccessFamily();
-
    /**
      * Sets user selected subscription at Modem.
      *
@@ -1971,6 +1966,73 @@ public interface CommandsInterface {
      * @param h Handler to be removed from the registrant list.
      */
     public void unregisterForRadioCapabilityChanged(Handler h);
+
+    /**
+     * @hide
+     * CM-specific: Ask the RIL about the presence of back-compat flags
+     */
+    public boolean needsOldRilFeature(String feature);
+
+    /**
+     * @hide
+     * samsung stk service implementation - set up registrant for sending
+     * sms send result from modem(RIL) to catService
+     */
+    void setOnCatSendSmsResult(Handler h, int what, Object obj);
+    void unSetOnCatSendSmsResult(Handler h);
+
+    /**
+     * Start LCE (Link Capacity Estimation) service with a desired reporting interval.
+     *
+     * @param reportIntervalMs
+     *        LCE info reporting interval (ms).
+     *
+     * @param result Callback message contains the current LCE status.
+     * {byte status, int actualIntervalMs}
+     */
+    public void startLceService(int reportIntervalMs, boolean pullMode, Message result);
+
+    /**
+     * Stop LCE service.
+     *
+     * @param result Callback message contains the current LCE status:
+     * {byte status, int actualIntervalMs}
+     *
+     */
+    public void stopLceService(Message result);
+
+    /**
+     * Pull LCE service for capacity data.
+     *
+     * @param result Callback message contains the capacity info:
+     * {int capacityKbps, byte confidenceLevel, byte lceSuspendedTemporarily}
+     */
+    public void pullLceData(Message result);
+
+    /**
+     * Register a LCE info listener.
+     *
+     * @param h Handler for notification message.
+     * @param what User-defined message code.
+     * @param obj User object.
+     */
+    void registerForLceInfo(Handler h, int what, Object obj);
+
+    /**
+     * Unregister the LCE Info listener.
+     *
+     * @param h handle to be removed.
+     */
+    void unregisterForLceInfo(Handler h);
+
+    /**
+     *
+     * Get modem activity info and stats
+     *
+     * @param result Callback message contains the modem activity information
+     */
+    public void getModemActivityInfo(Message result);
+
     /**
      * Request to update the current local call hold state.
      * @param lchStatus, true if call is in lch state

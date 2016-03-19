@@ -24,6 +24,8 @@ import android.graphics.Bitmap;
  */
 class CommandParams {
     CommandDetails mCmdDet;
+    // Variable to track if an optional icon load has failed.
+    boolean mLoadIconFailed = false;
 
     CommandParams(CommandDetails cmdDet) {
         mCmdDet = cmdDet;
@@ -57,6 +59,11 @@ class DisplayTextParams extends CommandParams {
         }
         return false;
     }
+
+    @Override
+    public String toString() {
+        return "TextMessage=" + mTextMsg + " " + super.toString();
+    }
 }
 
 class LaunchBrowserParams extends CommandParams {
@@ -79,6 +86,11 @@ class LaunchBrowserParams extends CommandParams {
             return true;
         }
         return false;
+    }
+
+    @Override
+    public String toString() {
+        return "TextMessage=" + mConfirmMsg + " " + super.toString();
     }
 }
 
@@ -210,5 +222,26 @@ class BIPClientParams extends CommandParams {
             return true;
         }
         return false;
+    }
+}
+
+// Samsung STK
+class SendSMSParams extends DisplayTextParams {
+    String pdu;
+    String smscAddress;
+
+    SendSMSParams(CommandDetails cmdDet, TextMessage textmessage, String smscaddress, String smsPdu) {
+        super(cmdDet, textmessage);
+        smscAddress = smscaddress;
+        pdu = smsPdu;
+    }
+}
+
+class SendUSSDParams extends DisplayTextParams {
+    String ussdString;
+
+    SendUSSDParams(CommandDetails cmdDet, TextMessage textmessage, String ussdstring) {
+        super(cmdDet, textmessage);
+        ussdString = ussdstring;
     }
 }
