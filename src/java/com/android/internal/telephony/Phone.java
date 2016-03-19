@@ -2013,13 +2013,6 @@ public interface Phone {
     public int getRadioAccessFamily();
 
     /**
-     *  Get the associated data modems Id.
-     *
-     *  @return a String containing the id of the data modem
-     */
-    public String getModemUuId();
-
-    /**
      *  The RadioCapability has changed. This comes up from the RIL and is called when radios first
      *  become available or after a capability switch.  The flow is we use setRadioCapability to
      *  request a change with the RIL and get an UNSOL response with the new data which gets set
@@ -2028,6 +2021,13 @@ public interface Phone {
      *  @param rc the phone radio capability currently in effect for this phone.
      */
     public void radioCapabilityUpdated(RadioCapability rc);
+
+    /**
+     *  Get the associated data modems Id.
+     *
+     *  @return a String containing the id of the data modem
+     */
+    public String getModemUuId();
 
     /**
      * Registers the handler when phone radio  capability is changed.
@@ -2103,4 +2103,9 @@ public interface Phone {
      * Set boolean broadcastEmergencyCallStateChanges
      */
     public void setBroadcastEmergencyCallStateChanges(boolean broadcast);
+
+    /** Request to update the current local call hold state.
+     * @param lchStatus, true if call is in lch state
+     */
+    public void setLocalCallHold(boolean lchStatus);
 }

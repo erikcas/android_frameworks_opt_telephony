@@ -73,14 +73,16 @@ public class PhoneProxy extends Handler implements Phone {
 
     private int mRilVersion;
 
-    private static final int EVENT_VOICE_RADIO_TECH_CHANGED = 1;
+    protected static final int EVENT_VOICE_RADIO_TECH_CHANGED = 1;
     private static final int EVENT_RADIO_ON = 2;
-    private static final int EVENT_REQUEST_VOICE_RADIO_TECH_DONE = 3;
-    private static final int EVENT_RIL_CONNECTED = 4;
+    protected static final int EVENT_REQUEST_VOICE_RADIO_TECH_DONE = 3;
+    protected static final int EVENT_RIL_CONNECTED = 4;
     private static final int EVENT_UPDATE_PHONE_OBJECT = 5;
     private static final int EVENT_CARRIER_CONFIG_CHANGED = 6;
+    private static final int EVENT_RADIO_AVAILABLE = 7;
+    protected static final int EVENT_RADIO_UNAVAILABLE = 8;
 
-    private int mPhoneId = 0;
+    protected int mPhoneId = 0;
 
     private Context mContext;
     private BroadcastReceiver mPhoneProxyReceiver = new BroadcastReceiver() {
@@ -106,8 +108,10 @@ public class PhoneProxy extends Handler implements Phone {
 
         mCommandsInterface.registerForRilConnected(this, EVENT_RIL_CONNECTED, null);
         mCommandsInterface.registerForOn(this, EVENT_RADIO_ON, null);
+        mCommandsInterface.registerForAvailable(this, EVENT_RADIO_AVAILABLE, null);
         mCommandsInterface.registerForVoiceRadioTechChanged(
                              this, EVENT_VOICE_RADIO_TECH_CHANGED, null);
+        mCommandsInterface.registerForNotAvailable(this, EVENT_RADIO_UNAVAILABLE, null);
         mPhoneId = phone.getPhoneId();
         mIccSmsInterfaceManager =
                 new IccSmsInterfaceManager((PhoneBase)this.mActivePhone);
@@ -129,6 +133,8 @@ public class PhoneProxy extends Handler implements Phone {
     public void handleMessage(Message msg) {
         AsyncResult ar = (AsyncResult) msg.obj;
         switch(msg.what) {
+        case EVENT_RADIO_AVAILABLE:
+            // intentional fall through.
         case EVENT_RADIO_ON:
             /* Proactively query voice radio technologies */
             mCommandsInterface.getVoiceRadioTechnology(
@@ -175,21 +181,6 @@ public class PhoneProxy extends Handler implements Phone {
             }
             // Force update IMS service
             ImsManager.updateImsServiceConfig(mContext, mPhoneId, true);
-
-            // Update broadcastEmergencyCallStateChanges
-            CarrierConfigManager configMgr = (CarrierConfigManager)
-                    mActivePhone.getContext().getSystemService(Context.CARRIER_CONFIG_SERVICE);
-            PersistableBundle b = configMgr.getConfigForSubId(mActivePhone.getSubId());
-            if (b != null) {
-                boolean broadcastEmergencyCallStateChanges = b.getBoolean(
-                        CarrierConfigManager.KEY_BROADCAST_EMERGENCY_CALL_STATE_CHANGES_BOOL);
-                logd("broadcastEmergencyCallStateChanges =" + broadcastEmergencyCallStateChanges);
-                mActivePhone.setBroadcastEmergencyCallStateChanges(
-                        broadcastEmergencyCallStateChanges);
-            } else {
-                loge("didn't get broadcastEmergencyCallStateChanges from carrier config");
-            }
-
             break;
 
         default:
@@ -200,15 +191,15 @@ public class PhoneProxy extends Handler implements Phone {
         super.handleMessage(msg);
     }
 
-    private static void logd(String msg) {
+    protected void logd(String msg) {
         Rlog.d(LOG_TAG, "[PhoneProxy] " + msg);
     }
 
-    private void loge(String msg) {
+    protected void loge(String msg) {
         Rlog.e(LOG_TAG, "[PhoneProxy] " + msg);
     }
 
-    private void phoneObjectUpdater(int newVoiceRadioTech) {
+    protected void phoneObjectUpdater(int newVoiceRadioTech) {
         logd("phoneObjectUpdater: newVoiceRadioTech=" + newVoiceRadioTech);
 
         if (mActivePhone != null) {
@@ -1398,6 +1389,7 @@ public class PhoneProxy extends Handler implements Phone {
     @Override
     public void dispose() {
         mCommandsInterface.unregisterForOn(this);
+        mCommandsInterface.unregisterForAvailable(this);
         mCommandsInterface.unregisterForVoiceRadioTechChanged(this);
         mCommandsInterface.unregisterForRilConnected(this);
         mContext.unregisterReceiver(mPhoneProxyReceiver);
@@ -1581,7 +1573,7 @@ public class PhoneProxy extends Handler implements Phone {
     }
 
     @Override
-    public RadioCapability getRadioCapability() {
+        public RadioCapability getRadioCapability() {
         return mActivePhone.getRadioCapability();
     }
 
@@ -1683,5 +1675,10 @@ public class PhoneProxy extends Handler implements Phone {
         }
         pw.flush();
         pw.println("++++++++++++++++++++++++++++++++");
+    }
+
+    @Override
+    public void setLocalCallHold(boolean lchStatus) {
+        mActivePhone.setLocalCallHold(lchStatus);
     }
 }

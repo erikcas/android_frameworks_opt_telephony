@@ -47,7 +47,7 @@ import java.util.HashMap;
  * multiple data connections. For instance listening for unsolicited messages
  * and then demultiplexing them to the appropriate DC.
  */
-class DcController extends StateMachine {
+public class DcController extends StateMachine {
     private static final boolean DBG = true;
     private static final boolean VDBG = false;
 
@@ -277,8 +277,18 @@ class DcController extends StateMachine {
                                 if (DBG) log("onDataStateChanged: inactive, add to cleanup list");
                                 apnsToCleanup.addAll(dc.mApnContexts.keySet());
                             } else {
-                                if (DBG) log("onDataStateChanged: inactive, add to retry list");
-                                dcsToRetry.add(dc);
+                                for (ApnContext apnContext : dc.mApnContexts.keySet()) {
+                                    if (apnContext.isEnabled()) {
+                                        if (DBG) {
+                                            log("onDataStateChanged: inactive, add to retry list");
+                                        }
+                                        dcsToRetry.add(dc);
+                                        break;
+                                    } else {
+                                        apnsToCleanup.add(apnContext);
+                                        if (DBG) log("APN is disabled, not retrying.");
+                                    }
+                                }
                             }
                         }
                     } else {

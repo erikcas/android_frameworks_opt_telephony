@@ -62,6 +62,7 @@ import android.view.WindowManager;
 import android.telephony.Rlog;
 
 import com.android.internal.telephony.cdma.CDMALTEPhone;
+import com.android.internal.telephony.ConfigResourceUtil;
 import com.android.internal.telephony.Phone;
 import com.android.internal.telephony.PhoneBase;
 import com.android.internal.telephony.DctConstants;
@@ -71,6 +72,7 @@ import com.android.internal.telephony.TelephonyIntents;
 import com.android.internal.telephony.gsm.GSMPhone;
 import com.android.internal.telephony.PhoneConstants;
 import com.android.internal.telephony.RILConstants;
+import com.android.internal.telephony.ServiceStateTracker;
 import com.android.internal.telephony.uicc.IccRecords;
 import com.android.internal.telephony.uicc.UiccController;
 import com.android.internal.util.AsyncChannel;
@@ -84,7 +86,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.Objects;
 import java.lang.StringBuilder;
 
-import com.android.internal.telephony.ServiceStateTracker;
 /**
  * {@hide}
  */
@@ -722,13 +723,6 @@ public final class DcTracker extends DcTrackerBase {
             if (DBG && !recordsLoaded) log("isDataAllowed getRecordsLoaded=" + recordsLoaded);
         }
 
-        //FIXME always attach
-        boolean psRestricted = mIsPsRestricted;
-        int phoneNum = TelephonyManager.getDefault().getPhoneCount();
-        if (phoneNum > 1) {
-            attachedState = true;
-            psRestricted = false;
-        }
         int dataSub = SubscriptionManager.getDefaultDataSubId();
         boolean defaultDataSelected = SubscriptionManager.isValidSubscriptionId(dataSub);
         PhoneConstants.State state = PhoneConstants.State.IDLE;
@@ -742,6 +736,7 @@ public final class DcTracker extends DcTrackerBase {
         if (mPhone.getCallTracker() != null) {
             state = mPhone.getCallTracker().getState();
         }
+
         boolean allowed =
                     (attachedState || mAutoAttachOnCreation.get()) &&
                     recordsLoaded &&
@@ -750,8 +745,7 @@ public final class DcTracker extends DcTrackerBase {
                     internalDataEnabled &&
                     defaultDataSelected &&
                     (!mPhone.getServiceState().getDataRoaming() || getDataOnRoamingEnabled()) &&
-                    //!mIsPsRestricted &&
-                    !psRestricted &&
+                    !mIsPsRestricted &&
                     desiredPowerState;
         if (!allowed && DBG) {
             String reason = "";
@@ -859,6 +853,13 @@ public final class DcTracker extends DcTrackerBase {
         boolean desiredPowerState = sst.getDesiredPowerState();
         boolean checkUserDataEnabled =
                     !(apnContext.getApnType().equals(PhoneConstants.APN_TYPE_IMS));
+
+        // MMS: If property is set, enable mms data even if mobile data is turned off.
+        if (apnContext.getApnType().equals(PhoneConstants.APN_TYPE_MMS)) {
+               checkUserDataEnabled = checkUserDataEnabled &&
+                   !(ConfigResourceUtil.getBooleanValue(mPhone.getContext(),
+                               "config_enable_mms_with_mobile_data_off"));
+        }
 
         if (apnContext.isConnectable() && (isEmergencyApn ||
                 (isDataAllowed(apnContext) &&
@@ -2430,7 +2431,7 @@ public final class DcTracker extends DcTrackerBase {
     }
 
     /** Return the DC AsyncChannel for the new data connection */
-    private DcAsyncChannel createDataConnection() {
+    protected DcAsyncChannel createDataConnection() {
         if (DBG) log("createDataConnection E");
 
         int id = mUniqueIdGenerator.getAndIncrement();
