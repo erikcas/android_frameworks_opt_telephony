@@ -451,6 +451,8 @@ abstract class ValueParser {
                     valueIndex + 1, ((length - 1) * 8) / 7);
         } catch (IndexOutOfBoundsException e) {
             throw new ResultException(ResultCode.CMD_DATA_NOT_UNDERSTOOD);
+        }
+    }
 
     static int retrieveTarget(ComprehensionTlv ctlv) throws ResultException {
         ActivateDescriptor activateDesc = new ActivateDescriptor();
