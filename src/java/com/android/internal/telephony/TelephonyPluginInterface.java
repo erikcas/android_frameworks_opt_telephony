@@ -33,8 +33,7 @@ import com.android.internal.telephony.dataconnection.DcTracker;
 import com.android.internal.telephony.dataconnection.DctController;
 import com.android.internal.telephony.gsm.GSMPhone;
 import com.android.internal.telephony.gsm.GsmServiceStateTracker;
-import com.android.internal.telephony.uicc.SIMRecords;
-import com.android.internal.telephony.uicc.UiccCardApplication;
+
 
 public interface TelephonyPluginInterface {
 
@@ -62,7 +61,4 @@ public interface TelephonyPluginInterface {
             Phone[] phoneProxy, CommandsInterface[] commandsInterfaces);
 
     public GsmServiceStateTracker makeGsmServiceStateTracker(GSMPhone phone);
-
-    public SIMRecords makeSIMRecords (UiccCardApplication app, Context c,
-            CommandsInterface ci);
 }

@@ -26,7 +26,6 @@ import android.telephony.Rlog;
 
 import com.android.internal.telephony.CommandsInterface;
 import com.android.internal.telephony.PhoneConstants;
-import com.android.internal.telephony.TelephonyPluginDelegate;
 import com.android.internal.telephony.uicc.IccCardApplicationStatus.AppState;
 import com.android.internal.telephony.uicc.IccCardApplicationStatus.AppType;
 import com.android.internal.telephony.uicc.IccCardApplicationStatus.PersoSubState;
@@ -179,7 +178,7 @@ public class UiccCardApplication {
 
     private IccRecords createIccRecords(AppType type, Context c, CommandsInterface ci) {
         if (type == AppType.APPTYPE_USIM || type == AppType.APPTYPE_SIM) {
-            return TelephonyPluginDelegate.getInstance().makeSIMRecords(this, c, ci);
+            return new SIMRecords(this, c, ci);
         } else if (type == AppType.APPTYPE_RUIM || type == AppType.APPTYPE_CSIM){
             return new RuimRecords(this, c, ci);
         } else if (type == AppType.APPTYPE_ISIM) {
