@@ -371,18 +371,23 @@ public class CdmaLteServiceStateTracker extends CdmaServiceStateTracker {
 
         boolean hasLocationChanged = !mNewCellLoc.equals(mCellLoc);
 
+        boolean hasCssIndicatorChanged = (mSS.getCssIndicator() != mNewSS.getCssIndicator());
         boolean has4gHandoff =
                 mNewSS.getDataRegState() == ServiceState.STATE_IN_SERVICE &&
-                (((mSS.getRilDataRadioTechnology() == ServiceState.RIL_RADIO_TECHNOLOGY_LTE) &&
-                  (mNewSS.getRilDataRadioTechnology() == ServiceState.RIL_RADIO_TECHNOLOGY_EHRPD)) ||
-                 ((mSS.getRilDataRadioTechnology() == ServiceState.RIL_RADIO_TECHNOLOGY_EHRPD) &&
-                  (mNewSS.getRilDataRadioTechnology() == ServiceState.RIL_RADIO_TECHNOLOGY_LTE)));
+                ((isRatLte(mSS.getRilDataRadioTechnology()) &&
+                  (mNewSS.getRilDataRadioTechnology() ==
+                    ServiceState.RIL_RADIO_TECHNOLOGY_EHRPD)) ||
+                 ((mSS.getRilDataRadioTechnology() ==
+                    ServiceState.RIL_RADIO_TECHNOLOGY_EHRPD) &&
+                  isRatLte(mNewSS.getRilDataRadioTechnology())));
 
         boolean hasMultiApnSupport =
-                (((mNewSS.getRilDataRadioTechnology() == ServiceState.RIL_RADIO_TECHNOLOGY_LTE) ||
-                  (mNewSS.getRilDataRadioTechnology() == ServiceState.RIL_RADIO_TECHNOLOGY_EHRPD)) &&
-                 ((mSS.getRilDataRadioTechnology() != ServiceState.RIL_RADIO_TECHNOLOGY_LTE) &&
-                  (mSS.getRilDataRadioTechnology() != ServiceState.RIL_RADIO_TECHNOLOGY_EHRPD)));
+                ((isRatLte(mNewSS.getRilDataRadioTechnology()) ||
+                  (mNewSS.getRilDataRadioTechnology() ==
+                    ServiceState.RIL_RADIO_TECHNOLOGY_EHRPD)) &&
+                 (!isRatLte(mSS.getRilDataRadioTechnology()) &&
+                  (mSS.getRilDataRadioTechnology() !=
+                    ServiceState.RIL_RADIO_TECHNOLOGY_EHRPD)));
 
         boolean hasLostMultiApnSupport =
             ((mNewSS.getRilDataRadioTechnology() >= ServiceState.RIL_RADIO_TECHNOLOGY_IS95A) &&
@@ -436,12 +441,12 @@ public class CdmaLteServiceStateTracker extends CdmaServiceStateTracker {
 
         if (hasDataRadioTechnologyChanged) {
             tm.setDataNetworkTypeForPhone(mPhone.getPhoneId(), mSS.getRilDataRadioTechnology());
-        
-			if (ServiceState.RIL_RADIO_TECHNOLOGY_IWLAN
+
+        if (ServiceState.RIL_RADIO_TECHNOLOGY_IWLAN
                         == mSS.getRilDataRadioTechnology()) {
                 log("pollStateDone: IWLAN enabled");
             }
-		}
+        }
 
         if (hasRegistered) {
             mNetworkAttachedRegistrants.notifyRegistrants();
@@ -451,9 +456,10 @@ public class CdmaLteServiceStateTracker extends CdmaServiceStateTracker {
             boolean hasBrandOverride = mUiccController.getUiccCard(getPhoneId()) == null ? false :
                     (mUiccController.getUiccCard(getPhoneId()).getOperatorBrandOverride() != null);
             if (!hasBrandOverride && (mCi.getRadioState().isOn()) && (mPhone.isEriFileLoaded()) &&
-                    (mSS.getRilVoiceRadioTechnology() != ServiceState.RIL_RADIO_TECHNOLOGY_LTE ||
+                    (!isRatLte(mSS.getRilVoiceRadioTechnology()) ||
                             mPhone.getContext().getResources().getBoolean(com.android.internal.R.
-                                    bool.config_LTE_eri_for_network_name))) {
+                                    bool.config_LTE_eri_for_network_name)) &&
+                                    !mIsSubscriptionFromRuim) {
                 // Only when CDMA is in service, ERI will take effect
                 String eriText = mSS.getOperatorAlphaLong();
                 // Now the CDMAPhone sees the new ServiceState so it can get the
@@ -477,8 +483,10 @@ public class CdmaLteServiceStateTracker extends CdmaServiceStateTracker {
             }
 
             if (mUiccApplcation != null && mUiccApplcation.getState() == AppState.APPSTATE_READY &&
-                    mIccRecords != null && (mSS.getVoiceRegState() == ServiceState.STATE_IN_SERVICE)
-                    && mSS.getRilVoiceRadioTechnology() != ServiceState.RIL_RADIO_TECHNOLOGY_LTE) {
+                    mIccRecords != null &&
+                    ((mSS.getVoiceRegState() == ServiceState.STATE_IN_SERVICE)
+                    || (mSS.getDataRegState() == ServiceState.STATE_IN_SERVICE))
+                    && !isRatLte(mSS.getRilVoiceRadioTechnology())) {
                 // SIM is found on the device. If ERI roaming is OFF, and SID/NID matches
                 // one configured in SIM, use operator name from CSIM record. Note that ERI, SID,
                 // and NID are CDMA only, not applicable to LTE.
@@ -488,7 +496,8 @@ public class CdmaLteServiceStateTracker extends CdmaServiceStateTracker {
 
                 if (showSpn && (iconIndex == EriInfo.ROAMING_INDICATOR_OFF) &&
                     isInHomeSidNid(mSS.getSystemId(), mSS.getNetworkId()) &&
-                    mIccRecords != null) {
+                    mIccRecords != null &&
+                    !TextUtils.isEmpty(mIccRecords.getServiceProviderName())) {
                     mSS.setOperatorAlphaLong(mIccRecords.getServiceProviderName());
                 }
             }
@@ -544,10 +553,11 @@ public class CdmaLteServiceStateTracker extends CdmaServiceStateTracker {
             mPhone.notifyServiceStateChanged(mSS);
         }
 
-        if (hasCdmaDataConnectionAttached || has4gHandoff) {
-            mAttachedRegistrants.notifyRegistrants();
-        }
-
+        // First notify detached, then rat changed, then attached - that's the way it
+        // happens in the modem.
+        // Behavior of recipients (DcTracker, for instance) depends on this sequence
+        // since DcTracker reloads profiles on "rat_changed" notification and sets up
+        // data call on "attached" notification.
         if (hasCdmaDataConnectionDetached) {
             mDetachedRegistrants.notifyRegistrants();
         }
@@ -573,6 +583,9 @@ public class CdmaLteServiceStateTracker extends CdmaServiceStateTracker {
         if (hasDataRoamingOn) {
             mDataRoamingOnRegistrants.notifyRegistrants();
         }
+        if (hasCdmaDataConnectionAttached || has4gHandoff) {
+            mAttachedRegistrants.notifyRegistrants();
+        }
 
         if (hasDataRoamingOff) {
             mDataRoamingOffRegistrants.notifyRegistrants();
@@ -580,6 +593,10 @@ public class CdmaLteServiceStateTracker extends CdmaServiceStateTracker {
 
         if (hasLocationChanged) {
             mPhone.notifyLocationChanged();
+        }
+
+        if (hasCssIndicatorChanged) {
+            mPhone.notifyDataConnection(Phone.REASON_CSS_INDICATOR_CHANGED);
         }
 
         ArrayList<CellInfo> arrayCi = new ArrayList<CellInfo>();
@@ -609,13 +626,13 @@ public class CdmaLteServiceStateTracker extends CdmaServiceStateTracker {
 
     @Override
     protected boolean onSignalStrengthResult(AsyncResult ar, boolean isGsm) {
-        if (mSS.getRilDataRadioTechnology() == ServiceState.RIL_RADIO_TECHNOLOGY_LTE) {
+        if (isRatLte(mSS.getRilDataRadioTechnology())) {
             isGsm = true;
         }
         boolean ssChanged = super.onSignalStrengthResult(ar, isGsm);
 
         synchronized (mCellInfo) {
-            if (mSS.getRilDataRadioTechnology() == ServiceState.RIL_RADIO_TECHNOLOGY_LTE) {
+            if (isRatLte(mSS.getRilDataRadioTechnology())) {
                 mCellInfoLte.setTimeStamp(SystemClock.elapsedRealtime() * 1000);
                 mCellInfoLte.setTimeStampType(CellInfo.TIMESTAMP_TYPE_JAVA_RIL);
                 mCellInfoLte.getCellSignalStrength()
@@ -709,7 +726,8 @@ public class CdmaLteServiceStateTracker extends CdmaServiceStateTracker {
                 if (dcTracker.isDisconnected()
                         && (dds == mPhone.getSubId()
                             || (dds != mPhone.getSubId()
-                                && ProxyController.getInstance().isDataDisconnected(dds)))) {
+                                && ProxyController.getInstance().isDataDisconnected(dds))
+                            || !SubscriptionManager.isValidSubscriptionId(dds))) {
                     // To minimize race conditions we do this after isDisconnected
                     dcTracker.cleanUpAllConnections(Phone.REASON_RADIO_TURNED_OFF);
                     if (DBG) log("Data disconnected, turn off radio right away.");

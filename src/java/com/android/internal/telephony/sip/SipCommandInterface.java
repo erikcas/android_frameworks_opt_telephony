@@ -73,7 +73,7 @@ class SipCommandInterface extends BaseCommands implements CommandsInterface {
     }
 
     @Override
-    public void supplyNetworkDepersonalization(String netpin, Message result) {
+    public void supplyNetworkDepersonalization(String netpin, String type, Message result) {
     }
 
     @Override
@@ -567,24 +567,6 @@ class SipCommandInterface extends BaseCommands implements CommandsInterface {
 
     @Override
     public void setDataProfile(DataProfile[] dps, Message result) {
-    }
-
-    @Override
-    public void iccOpenLogicalChannel(String AID, Message response) {
-    }
-
-    @Override
-    public void iccCloseLogicalChannel(int channel, Message response) {
-    }
-
-    @Override
-    public void iccTransmitApduLogicalChannel(int channel, int cla, int instruction,
-            int p1, int p2, int p3, String data, Message response) {
-    }
-
-    @Override
-    public void iccTransmitApduBasicChannel(int cla, int instruction, int p1, int p2,
-            int p3, String data, Message response) {
     }
 
     @Override

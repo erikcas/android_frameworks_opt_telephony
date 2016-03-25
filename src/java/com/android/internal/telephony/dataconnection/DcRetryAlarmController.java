@@ -44,6 +44,7 @@ public class DcRetryAlarmController {
     private String mActionRetry;
     private static final String INTENT_RETRY_ALARM_WHAT = "what";
     private static final String INTENT_RETRY_ALARM_TAG = "tag";
+    private PendingIntent mRetryIntent = null;
 
     private BroadcastReceiver mIntentReceiver = new BroadcastReceiver() {
             @Override
@@ -109,7 +110,7 @@ public class DcRetryAlarmController {
      * @param ar is the result from SETUP_DATA_CALL
      * @return < 0 if no retry is needed otherwise the delay to the next SETUP_DATA_CALL
      */
-    int getSuggestedRetryTime(DataConnection dc, AsyncResult ar) {
+    public int getSuggestedRetryTime(DataConnection dc, AsyncResult ar) {
         int retryDelay;
 
         DataCallResponse response = (DataCallResponse) ar.result;
@@ -140,16 +141,25 @@ public class DcRetryAlarmController {
         Intent intent = new Intent(mActionRetry);
         intent.putExtra(INTENT_RETRY_ALARM_WHAT, what);
         intent.putExtra(INTENT_RETRY_ALARM_TAG, tag);
+        intent.addFlags(Intent.FLAG_RECEIVER_FOREGROUND);
 
         if (DBG) {
             log("startRetryAlarm: next attempt in " + (delay / 1000) + "s" +
                     " what=" + what + " tag=" + tag);
         }
 
-        PendingIntent retryIntent = PendingIntent.getBroadcast (mPhone.getContext(), 0,
+        mRetryIntent = PendingIntent.getBroadcast (mPhone.getContext(), 0,
                                         intent, PendingIntent.FLAG_UPDATE_CURRENT);
-        mAlarmManager.set(AlarmManager.ELAPSED_REALTIME_WAKEUP,
-                SystemClock.elapsedRealtime() + delay, retryIntent);
+        mAlarmManager.setExact(AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                SystemClock.elapsedRealtime() + delay, mRetryIntent);
+    }
+
+    public void cancel(){
+        if(mRetryIntent != null) {
+            if (DBG) log("cancel event: "+mRetryIntent);
+            mAlarmManager.cancel(mRetryIntent);
+            mRetryIntent = null;
+        }
     }
 
     @Override

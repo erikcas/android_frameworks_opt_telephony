@@ -16,6 +16,9 @@
 
 package com.android.internal.telephony;
 
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+
 import static com.android.internal.telephony.RILConstants.*;
 import static android.telephony.TelephonyManager.NETWORK_TYPE_UNKNOWN;
 import static android.telephony.TelephonyManager.NETWORK_TYPE_EDGE;
@@ -85,6 +88,8 @@ import java.io.FileDescriptor;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintWriter;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -243,6 +248,17 @@ public class RIL extends BaseCommands implements CommandsInterface {
      * the vendor ril.
      */
     private static final int DEFAULT_WAKE_LOCK_TIMEOUT = 60000;
+    private static final int BYTE_SIZE = 1;
+
+    /** Starting number for OEMHOOK request and response IDs */
+    private static final int OEMHOOK_BASE = 0x80000;
+
+    /** Set Local Call Hold subscription */
+    private static final int OEMHOOK_EVT_HOOK_SET_LOCAL_CALL_HOLD = OEMHOOK_BASE + 13;
+
+    private static final int INT_SIZE = 4;
+    private static final String OEM_IDENTIFIER = "QOEMHOOK";
+    int mHeaderSize = OEM_IDENTIFIER.length() + 2 * INT_SIZE;
 
     //***** Instance Variables
 
@@ -296,6 +312,13 @@ public class RIL extends BaseCommands implements CommandsInterface {
     private static final int CDMA_BSI_NO_OF_INTS_STRUCT = 3;
 
     private static final int CDMA_BROADCAST_SMS_NO_OF_SERVICE_CATEGORIES = 31;
+
+    private static final char NULL_TERMINATOR = '\0';
+
+    private static final int NULL_TERMINATOR_LENGTH = BYTE_SIZE;
+
+    /** Sim DePersonalization code */
+    private static final int OEMHOOK_EVT_HOOK_ENTER_DEPERSONALIZATION_CODE = OEMHOOK_BASE + 51;
 
     private final DisplayManager.DisplayListener mDisplayListener =
             new DisplayManager.DisplayListener() {
@@ -942,15 +965,32 @@ public class RIL extends BaseCommands implements CommandsInterface {
 
     @Override
     public void
-    supplyNetworkDepersonalization(String netpin, Message result) {
-        RILRequest rr = RILRequest.obtain(RIL_REQUEST_ENTER_NETWORK_DEPERSONALIZATION, result);
+    supplyNetworkDepersonalization(String netpin, String type, Message response) {
+        Rlog.d(RILJ_LOG_TAG, "supplyDepersonalization: netpin = " + netpin + " type = " + type);
 
-        if (RILJ_LOGD) riljLog(rr.serialString() + "> " + requestToString(rr.mRequest));
+        byte[] payload = null;
+        // type + null character +
+        // netpin + null character
+        int payloadLength  = type.length() + NULL_TERMINATOR_LENGTH +
+                                (netpin == null ? NULL_TERMINATOR_LENGTH
+                                        : netpin.length() + NULL_TERMINATOR_LENGTH);
 
-        rr.mParcel.writeInt(1);
-        rr.mParcel.writeString(netpin);
+        payload = new byte[payloadLength];
+        ByteBuffer buf = createBufferWithNativeByteOrder(payload);
+        // type
+        buf.put(type.getBytes());
+        buf.put((byte)NULL_TERMINATOR); // null character
+        // pin
+        if (netpin != null) buf.put(netpin.getBytes());
+        buf.put((byte)NULL_TERMINATOR); // null character
+        sendOemRilRequestRaw(OEMHOOK_EVT_HOOK_ENTER_DEPERSONALIZATION_CODE,
+                payload.length, payload, response);
+    }
 
-        send(rr);
+    private ByteBuffer createBufferWithNativeByteOrder(byte[] bytes) {
+        ByteBuffer buf = ByteBuffer.wrap(bytes);
+        buf.order(ByteOrder.nativeOrder());
+        return buf;
     }
 
     @Override
@@ -1525,13 +1565,105 @@ public class RIL extends BaseCommands implements CommandsInterface {
                 response);
 
         rr.mParcel.writeInt(status);
-        rr.mParcel.writeString(pdu);
+        constructCdmaWriteSmsRilRequest(rr, IccUtils.hexStringToBytes(pdu));
 
         if (RILJ_LOGV) riljLog(rr.serialString() + "> "
                 + requestToString(rr.mRequest)
                 + " " + status);
 
         send(rr);
+    }
+
+    /**
+     *  Restructures PDU data so that it is consistent with RIL
+     *  data structure.
+     *
+     *  @param pdu The data to be written to the RUIM card.
+     */
+    private void constructCdmaWriteSmsRilRequest(RILRequest rr, byte[] pdu) {
+        int address_nbr_of_digits;
+        int subaddr_nbr_of_digits;
+        int bearerDataLength;
+        ByteArrayInputStream bais = new ByteArrayInputStream(pdu);
+        DataInputStream dis = new DataInputStream(bais);
+
+        try {
+            int teleServiceId = 0;
+            byte servicePresent = 0;
+            int serviceCategory = 0;
+
+            int address_digit_mode = 0;
+            int address_nbr_mode = 0;
+            int address_ton = 0;
+            int address_nbr_plan = 0;
+
+            int subaddressType = 0;
+            byte subaddr_odd = 0;
+
+            teleServiceId = dis.readInt();
+            rr.mParcel.writeInt(teleServiceId);
+            servicePresent = (byte) dis.readInt();
+            rr.mParcel.writeByte(servicePresent);
+            serviceCategory = dis.readInt();
+            rr.mParcel.writeInt(serviceCategory);
+
+            address_digit_mode = dis.readByte();
+            rr.mParcel.writeInt(address_digit_mode);
+            address_nbr_mode = dis.readByte();
+            rr.mParcel.writeInt(address_nbr_mode);
+            address_ton = dis.readByte();
+            rr.mParcel.writeInt(address_ton);
+            address_nbr_plan = dis.readByte();
+            rr.mParcel.writeInt(address_nbr_plan);
+
+            address_nbr_of_digits = dis.readByte();
+            rr.mParcel.writeByte((byte) address_nbr_of_digits);
+            for (int i = 0; i < address_nbr_of_digits; i++) {
+                rr.mParcel.writeByte(dis.readByte()); // address_orig_bytes[i]
+            }
+
+            // int
+            subaddressType = dis.readByte();
+            rr.mParcel.writeInt(subaddressType); // subaddressType
+            subaddr_odd = (byte) dis.readByte();
+            rr.mParcel.writeByte(subaddr_odd); // subaddr_odd
+            subaddr_nbr_of_digits = (byte) dis.readByte();
+            rr.mParcel.writeByte((byte) subaddr_nbr_of_digits);
+            for (int i = 0; i < subaddr_nbr_of_digits; i++) {
+                rr.mParcel.writeByte(dis.readByte()); // subaddr_orig_bytes[i]
+            }
+
+            bearerDataLength = dis.readByte() & 0xff;
+            rr.mParcel.writeInt(bearerDataLength);
+            for (int i = 0; i < bearerDataLength; i++) {
+                rr.mParcel.writeByte(dis.readByte()); // bearerData[i]
+            }
+
+            riljLog(" teleServiceId=" + teleServiceId + " servicePresent=" + servicePresent
+                + " serviceCategory=" + serviceCategory
+                + " address_digit_mode=" + address_digit_mode
+                + " address_nbr_mode=" + address_nbr_mode + " address_ton=" + address_ton
+                + " address_nbr_plan=" + address_nbr_plan
+                + " address_nbr_of_digits=" + address_nbr_of_digits
+                + " subaddressType=" + subaddressType + " subaddr_odd= " + subaddr_odd
+                + " subaddr_nbr_of_digits=" + subaddr_nbr_of_digits
+                + " bearerDataLength=" + bearerDataLength);
+        } catch (IOException ex) {
+            if (RILJ_LOGD) riljLog("sendSmsCdma: conversion from input stream to object failed: "
+                    + ex);
+        } finally {
+            try {
+                if (null != bais) {
+                    bais.close();
+                }
+
+                if (null != dis) {
+                    dis.close();
+                }
+            } catch (IOException e) {
+                if (RILJ_LOGD) riljLog("sendSmsCdma: close input stream exception" + e);
+            }
+        }
     }
 
     /**
@@ -2002,6 +2134,38 @@ public class RIL extends BaseCommands implements CommandsInterface {
         if (RILJ_LOGD) riljLog(rr.serialString() + "> " + requestToString(rr.mRequest));
 
         send(rr);
+    }
+
+
+    @Override
+    public void setLocalCallHold(boolean lchStatus) {
+        byte param = lchStatus ? (byte)1 : 0;
+        byte[] payload = new byte[]{param};
+        Rlog.d(RILJ_LOG_TAG, "setLocalCallHold: lchStatus is " + lchStatus);
+
+        sendOemRilRequestRaw(OEMHOOK_EVT_HOOK_SET_LOCAL_CALL_HOLD, 1, payload, null);
+    }
+
+    private void sendOemRilRequestRaw(int requestId, int numPayload, byte[] payload,
+            Message response) {
+        byte[] request = new byte[mHeaderSize + numPayload * BYTE_SIZE];
+
+        ByteBuffer buf= ByteBuffer.wrap(request);
+        buf.order(ByteOrder.nativeOrder());
+
+        // Add OEM identifier String
+        buf.put(OEM_IDENTIFIER.getBytes());
+        // Add Request ID
+        buf.putInt(requestId);
+        if (numPayload > 0 && payload != null) {
+            // Add Request payload length
+            buf.putInt(numPayload * BYTE_SIZE);
+            for (byte b : payload) {
+                buf.put(b);
+            }
+        }
+
+        invokeOemRilRequestRaw(request, response);
     }
 
     @Override
@@ -2648,8 +2812,10 @@ public class RIL extends BaseCommands implements CommandsInterface {
             case RIL_REQUEST_IMS_SEND_SMS: ret =  responseSMS(p); break;
             case RIL_REQUEST_SIM_TRANSMIT_APDU_BASIC: ret =  responseICC_IO(p); break;
             case RIL_REQUEST_SIM_OPEN_CHANNEL: ret  = responseInts(p); break;
+            case RIL_REQUEST_CAF_SIM_OPEN_CHANNEL_WITH_P2: ret = responseInts(p); break;
             case RIL_REQUEST_SIM_CLOSE_CHANNEL: ret  = responseVoid(p); break;
             case RIL_REQUEST_SIM_TRANSMIT_APDU_CHANNEL: ret = responseICC_IO(p); break;
+            case RIL_REQUEST_SIM_GET_ATR: ret = responseString(p); break;
             case RIL_REQUEST_NV_READ_ITEM: ret = responseString(p); break;
             case RIL_REQUEST_NV_WRITE_ITEM: ret = responseVoid(p); break;
             case RIL_REQUEST_NV_WRITE_CDMA_PRL: ret = responseVoid(p); break;
@@ -2781,6 +2947,7 @@ public class RIL extends BaseCommands implements CommandsInterface {
             case RIL_REQUEST_GET_IMEI:
             case RIL_REQUEST_GET_IMEISV:
             case RIL_REQUEST_SIM_OPEN_CHANNEL:
+            case RIL_REQUEST_CAF_SIM_OPEN_CHANNEL_WITH_P2:
             case RIL_REQUEST_SIM_TRANSMIT_APDU_CHANNEL:
 
                 if (!RILJ_LOGV) {
@@ -4280,6 +4447,7 @@ public class RIL extends BaseCommands implements CommandsInterface {
             case RIL_REQUEST_IMS_SEND_SMS: return "RIL_REQUEST_IMS_SEND_SMS";
             case RIL_REQUEST_SIM_TRANSMIT_APDU_BASIC: return "RIL_REQUEST_SIM_TRANSMIT_APDU_BASIC";
             case RIL_REQUEST_SIM_OPEN_CHANNEL: return "RIL_REQUEST_SIM_OPEN_CHANNEL";
+            case RIL_REQUEST_CAF_SIM_OPEN_CHANNEL_WITH_P2: return "RIL_REQUEST_CAF_SIM_OPEN_CHANNEL_WITH_P2";
             case RIL_REQUEST_SIM_CLOSE_CHANNEL: return "RIL_REQUEST_SIM_CLOSE_CHANNEL";
             case RIL_REQUEST_SIM_TRANSMIT_APDU_CHANNEL: return "RIL_REQUEST_SIM_TRANSMIT_APDU_CHANNEL";
             case RIL_REQUEST_NV_READ_ITEM: return "RIL_REQUEST_NV_READ_ITEM";
@@ -4686,7 +4854,7 @@ public class RIL extends BaseCommands implements CommandsInterface {
 
     public void setInitialAttachApn(String apn, String protocol, int authType, String username,
             String password, Message result) {
-        RILRequest rr = RILRequest.obtain(RIL_REQUEST_SET_INITIAL_ATTACH_APN, null);
+        RILRequest rr = RILRequest.obtain(RIL_REQUEST_SET_INITIAL_ATTACH_APN, result);
 
         if (RILJ_LOGD) riljLog("Set RIL_REQUEST_SET_INITIAL_ATTACH_APN");
 
@@ -4777,6 +4945,18 @@ public class RIL extends BaseCommands implements CommandsInterface {
         send(rr);
     }
 
+    @Override
+    public void iccOpenLogicalChannel(String AID, byte p2, Message response) {
+        RILRequest rr = RILRequest.obtain(RIL_REQUEST_CAF_SIM_OPEN_CHANNEL_WITH_P2, response);
+        rr.mParcel.writeByte(p2);
+        rr.mParcel.writeString(AID);
+
+        if (RILJ_LOGD)
+            riljLog(rr.serialString() + "> " + requestToString(rr.mRequest));
+
+        send(rr);
+    }
+
     /**
      * {@inheritDoc}
      */
@@ -4826,6 +5006,21 @@ public class RIL extends BaseCommands implements CommandsInterface {
             int p3, String data, Message response) {
         iccTransmitApduHelper(RIL_REQUEST_SIM_TRANSMIT_APDU_BASIC, 0, cla, instruction,
                 p1, p2, p3, data, response);
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public void getAtr(Message response) {
+        RILRequest rr = RILRequest.obtain(RIL_REQUEST_SIM_GET_ATR, response);
+        int slotId = 0;
+        rr.mParcel.writeInt(1);
+        rr.mParcel.writeInt(slotId);
+        if (RILJ_LOGD) riljLog(rr.serialString() + "> iccGetAtr: "
+                + requestToString(rr.mRequest) + " " + slotId);
+
+        send(rr);
     }
 
     /*

@@ -37,6 +37,8 @@ import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
 
 import com.android.internal.telephony.CallTracker;
+import com.android.internal.telephony.ConfigResourceUtil;
+import com.android.internal.telephony.PhoneFactory;
 
 import android.text.TextUtils;
 import android.telephony.Rlog;
@@ -55,6 +57,7 @@ import static com.android.internal.telephony.CommandsInterface.CF_REASON_BUSY;
 import static com.android.internal.telephony.CommandsInterface.CF_REASON_UNCONDITIONAL;
 import static com.android.internal.telephony.CommandsInterface.SERVICE_CLASS_VOICE;
 
+import com.android.internal.telephony.TelephonyPluginDelegate;
 import com.android.internal.telephony.dataconnection.DcTracker;
 import com.android.internal.telephony.Call;
 import com.android.internal.telephony.CallForwardInfo;
@@ -69,6 +72,7 @@ import com.android.internal.telephony.PhoneConstants;
 import com.android.internal.telephony.PhoneNotifier;
 import com.android.internal.telephony.PhoneProxy;
 import com.android.internal.telephony.PhoneSubInfo;
+import com.android.internal.telephony.SubscriptionController;
 import com.android.internal.telephony.UUSInfo;
 import com.android.internal.telephony.imsphone.ImsPhone;
 import com.android.internal.telephony.test.SimulatedRadioControl;
@@ -153,8 +157,8 @@ public class GSMPhone extends PhoneBase {
         mCi.setPhoneType(PhoneConstants.PHONE_TYPE_GSM);
         mCT = new GsmCallTracker(this);
 
-        mSST = new GsmServiceStateTracker(this);
-        mDcTracker = new DcTracker(this);
+        mSST = TelephonyPluginDelegate.getInstance().makeGsmServiceStateTracker(this);
+        mDcTracker = TelephonyPluginDelegate.getInstance().makeDcTracker(this);
 
         if (!unitTestMode) {
             mSimPhoneBookIntManager = new SimPhoneBookInterfaceManager(this);
@@ -169,6 +173,7 @@ public class GSMPhone extends PhoneBase {
         mSST.registerForNetworkAttached(this, EVENT_REGISTERED_TO_NETWORK, null);
         mCi.setOnSs(this, EVENT_SS, null);
         setProperties();
+        notifyPhoneStateChanged();
     }
 
     public
@@ -188,8 +193,8 @@ public class GSMPhone extends PhoneBase {
         mCi.setPhoneType(PhoneConstants.PHONE_TYPE_GSM);
         mCT = new GsmCallTracker(this);
 
-        mSST = new GsmServiceStateTracker(this);
-        mDcTracker = new DcTracker(this);
+        mSST = TelephonyPluginDelegate.getInstance().makeGsmServiceStateTracker(this);
+        mDcTracker = TelephonyPluginDelegate.getInstance().makeDcTracker(this);
 
         if (!unitTestMode) {
             mSimPhoneBookIntManager = new SimPhoneBookInterfaceManager(this);
@@ -208,6 +213,7 @@ public class GSMPhone extends PhoneBase {
         log("GSMPhone: constructor: sub = " + mPhoneId);
 
         setProperties();
+        notifyPhoneStateChanged();
     }
 
     protected void setProperties() {
@@ -316,13 +322,26 @@ public class GSMPhone extends PhoneBase {
             // get voice mail count from SIM
             countVoiceMessages = r.getVoiceMessageCount();
         }
-        int countVoiceMessagesStored = getStoredVoiceMessageCount();
-        if (countVoiceMessages == -1 && countVoiceMessagesStored != 0) {
-            countVoiceMessages = countVoiceMessagesStored;
+        if (countVoiceMessages == IccRecords.DEFAULT_VOICE_MESSAGE_COUNT) {
+            countVoiceMessages = getStoredVoiceMessageCount();
         }
         Rlog.d(LOG_TAG, "updateVoiceMail countVoiceMessages = " + countVoiceMessages
                 +" subId "+getSubId());
         setVoiceMessageCount(countVoiceMessages);
+    }
+
+    public boolean getCallForwardingIndicator() {
+        int callForwardingIndicator = IccRecords.CALL_FORWARDING_STATUS_UNKNOWN;
+        IccRecords r = getIccRecords();
+        if (r != null && r.isCallForwardStatusStored()) {
+            callForwardingIndicator = r.getVoiceCallForwardingFlag();
+        }
+
+        if (callForwardingIndicator == IccRecords.CALL_FORWARDING_STATUS_UNKNOWN) {
+            callForwardingIndicator = getVoiceCallForwardingFlag();
+        }
+        return (callForwardingIndicator == IccRecords.CALL_FORWARDING_STATUS_ENABLED) ||
+                getVideoCallForwardingPreference();
     }
 
     @Override
@@ -341,7 +360,8 @@ public class GSMPhone extends PhoneBase {
 
             ret = PhoneConstants.DataState.DISCONNECTED;
         } else if (!apnType.equals(PhoneConstants.APN_TYPE_EMERGENCY) &&
-                mSST.getCurrentDataConnectionState() != ServiceState.STATE_IN_SERVICE) {
+                mSST.getCurrentDataConnectionState() != ServiceState.STATE_IN_SERVICE
+                && mOosIsDisconnect) {
             // If we're out of service, open TCP sockets may still work
             // but no data will flow
 
@@ -349,6 +369,7 @@ public class GSMPhone extends PhoneBase {
             // Pass the actual State of EPDN
 
             ret = PhoneConstants.DataState.DISCONNECTED;
+            Rlog.d(LOG_TAG, "getDataConnectionState: Data is Out of Service. ret = " + ret);
         } else if (mDcTracker.isApnTypeEnabled(apnType) == false ||
                 mDcTracker.isApnTypeActive(apnType) == false) {
             //TODO: isApnTypeActive() is just checking whether ApnContext holds
@@ -807,8 +828,10 @@ public class GSMPhone extends PhoneBase {
 
         boolean imsUseEnabled = isImsUseEnabled()
                  && imsPhone != null
-                 && (imsPhone.isVolteEnabled() || imsPhone.isVowifiEnabled())
-                 && (imsPhone.getServiceState().getState() == ServiceState.STATE_IN_SERVICE);
+                 && (imsPhone.isVolteEnabled() || imsPhone.isVowifiEnabled() ||
+                 (imsPhone.isVideoCallEnabled() && VideoProfile.isVideo(videoState)))
+                 && (imsPhone.getServiceState().getState() == ServiceState.STATE_IN_SERVICE)
+                 && !shallDialOnCircuitSwitch(intentExtras);
 
         boolean useImsForEmergency = imsPhone != null
                 && isEmergency
@@ -832,6 +855,8 @@ public class GSMPhone extends PhoneBase {
                     + ((imsPhone != null) ? imsPhone.isVolteEnabled() : "N/A")
                     + ", imsPhone.isVowifiEnabled()="
                     + ((imsPhone != null) ? imsPhone.isVowifiEnabled() : "N/A")
+                    + ", imsPhone.isVideoCallEnabled()="
+                    + ((imsPhone != null) ? imsPhone.isVideoCallEnabled() : "N/A")
                     + ", imsPhone.getServiceState().getState()="
                     + ((imsPhone != null) ? imsPhone.getServiceState().getState() : "N/A"));
         }
@@ -896,6 +921,27 @@ public class GSMPhone extends PhoneBase {
     }
 
     @Override
+    public void addParticipant(String dialString) throws CallStateException {
+        ImsPhone imsPhone = mImsPhone;
+        boolean imsUseEnabled =
+                ImsManager.isVolteEnabledByPlatform(mContext) &&
+                ImsManager.isEnhanced4gLteModeSettingEnabledByUser(mContext);
+
+        if (imsUseEnabled && imsPhone != null
+                && imsPhone.getServiceState().getState() == ServiceState.STATE_IN_SERVICE
+                ) {
+            try {
+                if (LOCAL_DEBUG) Rlog.d(LOG_TAG, "Trying to add participant in IMS call");
+                imsPhone.addParticipant(dialString);
+            } catch (CallStateException e) {
+                if (LOCAL_DEBUG) Rlog.d(LOG_TAG, "IMS PS call exception " + e);
+            }
+        } else {
+            Rlog.e(LOG_TAG, "IMS is disabled so unable to add participant with IMS call");
+        }
+    }
+
+    @Override
     public boolean handlePinMmi(String dialString) {
         GsmMmiCode mmi = GsmMmiCode.newFromDialString(dialString, this, mUiccApplication.get());
 
@@ -933,7 +979,9 @@ public class GSMPhone extends PhoneBase {
     @Override
     public void
     startDtmf(char c) {
-        if (!PhoneNumberUtils.is12Key(c)) {
+        // in DSDA, char 'D' is used as DTMF char for playing supervisory tone for G/W.
+        // A, B, C & D are also supported as DTMF digits for G/W.
+        if (!(PhoneNumberUtils.is12Key(c) || (c >= 'A' && c <= 'D'))) {
             Rlog.e(LOG_TAG,
                 "startDtmf called with invalid character '" + c + "'");
         } else {
@@ -1194,9 +1242,47 @@ public class GSMPhone extends PhoneBase {
     }
 
     @Override
+    public void getCallForwardingOption(int commandInterfaceCFReason,
+            int commandInterfaceServiceClass, Message onComplete) {
+        ImsPhone imsPhone = mImsPhone;
+        if ((imsPhone != null)
+                && (imsPhone.getServiceState().getState() == ServiceState.STATE_IN_SERVICE
+                || imsPhone.isUtEnabled())) {
+            imsPhone.getCallForwardingOption(commandInterfaceCFReason,
+                    commandInterfaceServiceClass, onComplete);
+            return;
+        }
+
+        if (isValidCommandInterfaceCFReason(commandInterfaceCFReason)) {
+            if (LOCAL_DEBUG) Rlog.d(LOG_TAG, "requesting call forwarding query.");
+            Message resp;
+            if (commandInterfaceCFReason == CF_REASON_UNCONDITIONAL) {
+                resp = obtainMessage(EVENT_GET_CALL_FORWARD_DONE, onComplete);
+            } else {
+                resp = onComplete;
+            }
+            mCi.queryCallForwardStatus(commandInterfaceCFReason,
+                    commandInterfaceServiceClass, null, resp);
+        }
+    }
+
+    @Override
     public void setCallForwardingOption(int commandInterfaceCFAction,
             int commandInterfaceCFReason,
             String dialingNumber,
+            int timerSeconds,
+            Message onComplete) {
+        setCallForwardingOption(commandInterfaceCFAction,
+                commandInterfaceCFReason, dialingNumber,
+                CommandsInterface.SERVICE_CLASS_VOICE,
+                timerSeconds, onComplete);
+    }
+
+    @Override
+    public void setCallForwardingOption(int commandInterfaceCFAction,
+            int commandInterfaceCFReason,
+            String dialingNumber,
+            int commandInterfaceServiceClass,
             int timerSeconds,
             Message onComplete) {
         ImsPhone imsPhone = mImsPhone;
@@ -1204,7 +1290,8 @@ public class GSMPhone extends PhoneBase {
                 && ((imsPhone.getServiceState().getState() == ServiceState.STATE_IN_SERVICE)
                 || imsPhone.isUtEnabled())) {
             imsPhone.setCallForwardingOption(commandInterfaceCFAction,
-                    commandInterfaceCFReason, dialingNumber, timerSeconds, onComplete);
+                    commandInterfaceCFReason, dialingNumber,
+                    commandInterfaceServiceClass, timerSeconds, onComplete);
             return;
         }
 
@@ -1221,7 +1308,7 @@ public class GSMPhone extends PhoneBase {
             }
             mCi.setCallForward(commandInterfaceCFAction,
                     commandInterfaceCFReason,
-                    CommandsInterface.SERVICE_CLASS_VOICE,
+                    commandInterfaceServiceClass,
                     dialingNumber,
                     timerSeconds,
                     resp);
@@ -1245,12 +1332,10 @@ public class GSMPhone extends PhoneBase {
         ImsPhone imsPhone = mImsPhone;
         if ((imsPhone != null)
                 && (imsPhone.getServiceState().getState() == ServiceState.STATE_IN_SERVICE)) {
-            imsPhone.setOutgoingCallerIdDisplay(commandInterfaceCLIRMode, onComplete);
+            imsPhone.setOutgoingCallerIdDisplay(commandInterfaceCLIRMode,
+            obtainMessage(EVENT_SET_CLIR_COMPLETE, commandInterfaceCLIRMode, 0, onComplete));
             return;
         }
-        // Packing CLIR value in the message. This will be required for
-        // SharedPreference caching, if the message comes back as part of
-        // a success response.
         mCi.setCLIR(commandInterfaceCLIRMode,
                 obtainMessage(EVENT_SET_CLIR_COMPLETE, commandInterfaceCLIRMode, 0, onComplete));
     }
@@ -1375,6 +1460,22 @@ public class GSMPhone extends PhoneBase {
         }
     }
 
+    /**
+     * Used to check if Call Forwarding status is present on sim card. If not, a message is
+     * sent so we can check if the CF status is stored as a Shared Preference.
+     */
+    private void updateCallForwardStatus() {
+        if (LOCAL_DEBUG) Rlog.d(LOG_TAG, "updateCallForwardStatus got sim records");
+        IccRecords r = mIccRecords.get();
+        if (r != null && r.isCallForwardStatusStored()) {
+            // The Sim card has the CF info
+            if (LOCAL_DEBUG) Rlog.d(LOG_TAG, "Callforwarding info is present on sim");
+            notifyCallForwardingIndicator();
+        } else {
+            Message msg = obtainMessage(EVENT_GET_CALLFORWARDING_STATUS);
+            sendMessage(msg);
+        }
+    }
 
     private void
     onNetworkInitiatedUssd(GsmMmiCode mmi) {
@@ -1499,11 +1600,18 @@ public class GSMPhone extends PhoneBase {
                 String imsiFromSIM = getSubscriberId();
                 if (imsi != null && imsiFromSIM != null && !imsiFromSIM.equals(imsi)) {
                     storeVoiceMailNumber(null);
+                    setCallForwardingPreference(false);
                     setVmSimImsi(null);
+                    setVideoCallForwardingPreference(false);
+                    setSimImsi(null);
+                    SubscriptionController controller =
+                            SubscriptionController.getInstance();
+                    controller.removeStaleSubPreferences(CF_ENABLED);
                 }
 
                 mSimRecordsLoadedRegistrants.notifyRegistrants();
                 updateVoiceMail();
+                updateCallForwardStatus();
             break;
 
             case EVENT_GET_BASEBAND_VERSION_DONE:
@@ -1583,6 +1691,7 @@ public class GSMPhone extends PhoneBase {
                 Cfu cfu = (Cfu) ar.userObj;
                 if (ar.exception == null && r != null) {
                     setVoiceCallForwardingFlag(1, msg.arg1 == 1, cfu.mSetCfNumber);
+                    setCallForwardingPreference(msg.arg1 == 1);
                 }
                 if (cfu.mOnComplete != null) {
                     AsyncResult.forMessage(cfu.mOnComplete, ar.result, ar.exception);
@@ -1653,6 +1762,11 @@ public class GSMPhone extends PhoneBase {
                 // in re-using the existing functionality.
                 GsmMmiCode mmi = new GsmMmiCode(this, mUiccApplication.get());
                 mmi.processSsData(ar);
+                break;
+
+            case EVENT_GET_CALLFORWARDING_STATUS:
+                if (LOCAL_DEBUG) Rlog.d(LOG_TAG, "EVENT_GET_CALLFORWARDING_STATUS");
+                notifyCallForwardingIndicator();
                 break;
 
              default:
@@ -1748,6 +1862,7 @@ public class GSMPhone extends PhoneBase {
             } else {
                 for (int i = 0, s = infos.length; i < s; i++) {
                     if ((infos[i].serviceClass & SERVICE_CLASS_VOICE) != 0) {
+                        setCallForwardingPreference(infos[i].status == 1);
                         setVoiceCallForwardingFlag(1, (infos[i].status == 1),
                             infos[i].number);
                         // should only have the one
@@ -1814,14 +1929,12 @@ public class GSMPhone extends PhoneBase {
         return (r != null) ? r.isCspPlmnEnabled() : false;
     }
 
-    boolean isManualNetSelAllowed() {
+    public boolean isManualNetSelAllowed() {
 
         int nwMode = Phone.PREFERRED_NT_MODE;
         int subId = getSubId();
 
-        nwMode = android.provider.Settings.Global.getInt(mContext.getContentResolver(),
-                    android.provider.Settings.Global.PREFERRED_NETWORK_MODE + subId, nwMode);
-
+        nwMode = PhoneFactory.calculatePreferredNetworkType(mContext, subId);
         Rlog.d(LOG_TAG, "isManualNetSelAllowed in mode = " + nwMode);
         /*
          *  For multimode targets in global mode manual network
@@ -2019,4 +2132,65 @@ public class GSMPhone extends PhoneBase {
         }
     }
 
+    private boolean isValidFacilityString(String facility) {
+        if ((facility.equals(CommandsInterface.CB_FACILITY_BAOC))
+                || (facility.equals(CommandsInterface.CB_FACILITY_BAOIC))
+                || (facility.equals(CommandsInterface.CB_FACILITY_BAOICxH))
+                || (facility.equals(CommandsInterface.CB_FACILITY_BAIC))
+                || (facility.equals(CommandsInterface.CB_FACILITY_BAICr))
+                || (facility.equals(CommandsInterface.CB_FACILITY_BA_ALL))
+                || (facility.equals(CommandsInterface.CB_FACILITY_BA_MO))
+                || (facility.equals(CommandsInterface.CB_FACILITY_BA_MT))
+                || (facility.equals(CommandsInterface.CB_FACILITY_BA_SIM))
+                || (facility.equals(CommandsInterface.CB_FACILITY_BA_FD))) {
+            return true;
+        }
+        Rlog.e(LOG_TAG, " Invalid facility String : " + facility);
+        return false;
+    }
+
+    private boolean isCallBarringFacilitySupportedOverImsPhone(String facility) {
+        ImsPhone imsPhone = mImsPhone;
+        return ConfigResourceUtil.getBooleanValue(getContext(),
+                "config_enable_callbarring_over_ims") && (facility != null)
+                && (facility.equals(CommandsInterface.CB_FACILITY_BAIC)
+                || facility.equals(CommandsInterface.CB_FACILITY_BAICr))
+                && ((imsPhone != null)
+                && (imsPhone.getServiceState().getState() == ServiceState.STATE_IN_SERVICE
+                || imsPhone.isUtEnabled()));
+    }
+
+    @Override
+    public void getCallBarringOption(String facility, String password, Message onComplete) {
+        if (isValidFacilityString(facility)) {
+            if (isCallBarringFacilitySupportedOverImsPhone(facility)) {
+                if (LOCAL_DEBUG) Rlog.d(LOG_TAG, "Trying IMS PS get call barring");
+                ImsPhone imsPhone = mImsPhone;
+                imsPhone.getCallBarring(facility, onComplete);
+            } else {
+                mCi.queryFacilityLock(facility, password, CommandsInterface.SERVICE_CLASS_NONE,
+                        onComplete);
+            }
+        }
+    }
+
+    @Override
+    public void setCallBarringOption(String facility, boolean lockState, String password,
+            Message onComplete) {
+        if (isValidFacilityString(facility)) {
+            if (isCallBarringFacilitySupportedOverImsPhone(facility)) {
+                if (LOCAL_DEBUG) Rlog.d(LOG_TAG, "Trying IMS PS set call barring");
+                ImsPhone imsPhone = mImsPhone;
+                imsPhone.setCallBarring(facility, lockState, password, onComplete);
+            } else {
+                mCi.setFacilityLock(facility, lockState, password,
+                        CommandsInterface.SERVICE_CLASS_VOICE, onComplete);
+            }
+        }
+    }
+
+    @Override
+    public void requestChangeCbPsw(String facility, String oldPwd, String newPwd, Message result) {
+        mCi.changeBarringPassword(facility, oldPwd, newPwd, result);
+    }
 }

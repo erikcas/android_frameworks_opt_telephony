@@ -655,8 +655,13 @@ public final class GsmCallTracker extends CallTracker {
         for (Iterator<Connection> it = mHandoverConnections.iterator();
                 it.hasNext();) {
             Connection hoConnection = it.next();
-            log("handlePollCalls - disconnect hoConn= " + hoConnection);
-            ((ImsPhoneConnection)hoConnection).onDisconnect(DisconnectCause.NOT_VALID);
+            log("handlePollCalls - disconnect hoConn= " + hoConnection +
+                    " hoConn.State= " + hoConnection.getState());
+            if (hoConnection.getState().isRinging()) {
+                ((ImsPhoneConnection)hoConnection).onDisconnect(DisconnectCause.INCOMING_MISSED);
+            } else {
+                ((ImsPhoneConnection)hoConnection).onDisconnect(DisconnectCause.NOT_VALID);
+            }
             it.remove();
         }
 
@@ -742,11 +747,9 @@ public final class GsmCallTracker extends CallTracker {
         }
 
         if (conn == mPendingMO) {
-            // We're hanging up an outgoing call that doesn't have it's
-            // GSM index assigned yet
-
-            if (Phone.DEBUG_PHONE) log("hangup: set hangupPendingMO to true");
-            mHangupPendingMO = true;
+            // Allow HANGUP to RIL during pending MO is present
+            log("hangup conn with callId '-1' as there is no DIAL response yet ");
+            mCi.hangupConnection(-1, obtainCompleteMessage());
         } else {
             try {
                 mCi.hangupConnection (conn.getGSMIndex(), obtainCompleteMessage());
@@ -930,8 +933,20 @@ public final class GsmCallTracker extends CallTracker {
                 operationComplete();
             break;
 
-            case EVENT_SWITCH_RESULT:
             case EVENT_CONFERENCE_RESULT:
+                ar = (AsyncResult)msg.obj;
+                if (ar.exception != null) {
+                    mPhone.notifySuppServiceFailed(getFailedService(msg.what));
+                    List<Connection> conn = mForegroundCall.getConnections();
+                    if (conn.size() != 0) {
+                        Rlog.d(LOG_TAG, "Notify merge failure");
+                        conn.get(0).onConferenceMergeFailed();
+                    }
+                }
+                operationComplete();
+            break;
+
+            case EVENT_SWITCH_RESULT:
             case EVENT_SEPARATE_RESULT:
             case EVENT_ECT_RESULT:
                 ar = (AsyncResult)msg.obj;

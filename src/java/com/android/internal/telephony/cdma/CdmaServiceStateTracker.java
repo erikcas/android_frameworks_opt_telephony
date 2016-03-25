@@ -20,6 +20,7 @@ import android.app.AlarmManager;
 import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.res.Resources;
 import android.database.ContentObserver;
 import android.os.AsyncResult;
 import android.os.Build;
@@ -234,8 +235,7 @@ public class CdmaServiceStateTracker extends ServiceStateTracker {
         mCi.unregisterForVoiceNetworkStateChanged(this);
         mCi.unregisterForCdmaOtaProvision(this);
         mPhone.unregisterForEriFileLoaded(this);
-        if (mUiccApplcation != null) {mUiccApplcation.unregisterForReady(this);}
-        if (mIccRecords != null) {mIccRecords.unregisterForRecordsLoaded(this);}
+        unregisterForRuimEvents();
         mCi.unSetOnNITZTime(this);
         mCr.unregisterContentObserver(mAutoTimeObserver);
         mCr.unregisterContentObserver(mAutoTimeZoneObserver);
@@ -424,11 +424,17 @@ public class CdmaServiceStateTracker extends ServiceStateTracker {
             if (ar.exception == null) {
                 String cdmaSubscription[] = (String[])ar.result;
                 if (cdmaSubscription != null && cdmaSubscription.length >= 5) {
-                    mMdn = cdmaSubscription[0];
+                    if (null != cdmaSubscription[0]) {
+                        mMdn = cdmaSubscription[0];
+                    }
                     parseSidNid(cdmaSubscription[1], cdmaSubscription[2]);
 
-                    mMin = cdmaSubscription[3];
-                    mPrlVersion = cdmaSubscription[4];
+                    if (null != cdmaSubscription[3]) {
+                        mMin = cdmaSubscription[3];
+                    }
+                    if (null != cdmaSubscription[4]) {
+                        mPrlVersion = cdmaSubscription[4];
+                    }
                     if (DBG) log("GET_CDMA_SUBSCRIPTION: MDN=" + mMdn);
 
                     mIsMinInfoReady = true;
@@ -553,8 +559,13 @@ public class CdmaServiceStateTracker extends ServiceStateTracker {
         log("isFromRuim: " + mIsSubscriptionFromRuim);
         saveCdmaSubscriptionSource(newSubscriptionSource);
         if (!mIsSubscriptionFromRuim) {
+            // Unregister from any previous RUIM events if registered
+            // (switching from RUIM/SIM to NV)
+            unregisterForRuimEvents();
             // NV is ready when subscription source is NV
             sendMessage(obtainMessage(EVENT_NV_READY));
+        } else {
+            registerForRuimEvents();
         }
     }
 
@@ -580,19 +591,28 @@ public class CdmaServiceStateTracker extends ServiceStateTracker {
         String plmn = mSS.getOperatorAlphaLong();
         boolean showPlmn = false;
 
-        showPlmn = plmn != null;
-
         int subId = SubscriptionManager.INVALID_SUBSCRIPTION_ID;
         int[] subIds = SubscriptionManager.getSubId(mPhone.getPhoneId());
         if (subIds != null && subIds.length > 0) {
             subId = subIds[0];
         }
 
+        int combinedRegState = getCombinedRegState();
+        if (combinedRegState == ServiceState.STATE_OUT_OF_SERVICE) {
+            plmn = Resources.getSystem().getText(com.android.internal.
+                    R.string.lockscreen_carrier_default).toString();
+            if (DBG) log("updateSpnDisplay: radio is on but out " +
+                    "of service, set plmn='" + plmn + "'");
+        }
+
+        plmn = maybeUpdateHDTagForPlmn(showPlmn, plmn);
+
         if (mSubId != subId || !TextUtils.equals(plmn, mCurPlmn)) {
             // Allow A blank plmn, "" to set showPlmn to true. Previously, we
             // would set showPlmn to true only if plmn was not empty, i.e. was not
             // null and not blank. But this would cause us to incorrectly display
             // "No Service". Now showPlmn is set to true for any non null string.
+            showPlmn = plmn != null;
             if (DBG) {
                 log(String.format("updateSpnDisplay: changed sending intent" +
                             " showPlmn='%b' plmn='%s' subId='%d'", showPlmn, plmn, subId));
@@ -644,7 +664,7 @@ public class CdmaServiceStateTracker extends ServiceStateTracker {
                 if (states.length > 0) {
                     try {
                         regState = Integer.parseInt(states[0]);
-
+    
                         // states[3] (if present) is the current radio technology
                         if (states.length >= 4 && states[3] != null) {
                             dataRadioTechnology = Integer.parseInt(states[3]);
@@ -883,8 +903,7 @@ public class CdmaServiceStateTracker extends ServiceStateTracker {
                     mNewSS.setCdmaRoamingIndicator(mDefaultRoamingIndicator);
                 } else if (namMatch && !mIsInPrl) {
                     // TODO this will be removed when we handle roaming on LTE on CDMA+LTE phones
-                    if (mNewSS.getRilVoiceRadioTechnology()
-                            == ServiceState.RIL_RADIO_TECHNOLOGY_LTE) {
+                    if (isRatLte(mNewSS.getRilVoiceRadioTechnology())) {
                         log("Turn off roaming indicator as voice is LTE");
                         mNewSS.setCdmaRoamingIndicator(EriInfo.ROAMING_INDICATOR_OFF);
                     } else {
@@ -1331,10 +1350,11 @@ public class CdmaServiceStateTracker extends ServiceStateTracker {
             mPhone.notifyServiceStateChanged(mSS);
         }
 
-        if (hasCdmaDataConnectionAttached) {
-            mAttachedRegistrants.notifyRegistrants();
-        }
-
+        // First notify detached, then rat changed, then attached - that's the way it
+        // happens in the modem.
+        // Behavior of recipients (DcTracker, for instance) depends on this sequence
+        // since DcTracker reloads profiles on "rat_changed" notification and sets up
+        // data call on "attached" notification.
         if (hasCdmaDataConnectionDetached) {
             mDetachedRegistrants.notifyRegistrants();
         }
@@ -1359,6 +1379,10 @@ public class CdmaServiceStateTracker extends ServiceStateTracker {
 
         if (hasDataRoamingOn) {
             mDataRoamingOnRegistrants.notifyRegistrants();
+        }
+
+        if (hasCdmaDataConnectionAttached) {
+            mAttachedRegistrants.notifyRegistrants();
         }
 
         if (hasDataRoamingOff) {
@@ -1413,11 +1437,10 @@ public class CdmaServiceStateTracker extends ServiceStateTracker {
         String idd = mHbpcdUtils.getIddByMcc(
                 Integer.parseInt(operatorNumeric.substring(0,3)));
         if (idd != null && !idd.isEmpty()) {
-            mPhone.setSystemProperty(TelephonyProperties.PROPERTY_OPERATOR_IDP_STRING,
-                     idd);
+            SystemProperties.set(TelephonyProperties.PROPERTY_OPERATOR_IDP_STRING, idd);
         } else {
             // use default "+", since we don't know the current IDP
-            mPhone.setSystemProperty(TelephonyProperties.PROPERTY_OPERATOR_IDP_STRING, "+");
+            SystemProperties.set(TelephonyProperties.PROPERTY_OPERATOR_IDP_STRING, "+");
         }
     }
 
@@ -2021,6 +2044,26 @@ public class CdmaServiceStateTracker extends ServiceStateTracker {
         }
     }
 
+    private void registerForRuimEvents() {
+        log("registerForRuimEvents");
+        if (mUiccApplcation != null) {
+            mUiccApplcation.registerForReady(this, EVENT_RUIM_READY, null);
+        }
+        if (mIccRecords != null) {
+            mIccRecords.registerForRecordsLoaded(this, EVENT_RUIM_RECORDS_LOADED, null);
+        }
+    }
+
+    private void unregisterForRuimEvents() {
+        log("unregisterForRuimEvents");
+        if (mUiccApplcation != null) {
+            mUiccApplcation.unregisterForReady(this);
+        }
+        if (mIccRecords != null) {
+            mIccRecords.unregisterForRecordsLoaded(this);
+        }
+    }
+
     protected UiccCardApplication getUiccCardApplication() {
             return  mUiccController.getUiccCardApplication(mPhone.getPhoneId(),
                     UiccController.APP_FAM_3GPP2);
@@ -2035,24 +2078,16 @@ public class CdmaServiceStateTracker extends ServiceStateTracker {
         UiccCardApplication newUiccApplication = getUiccCardApplication();
 
         if (mUiccApplcation != newUiccApplication) {
-            if (mUiccApplcation != null) {
-                log("Removing stale icc objects.");
-                mUiccApplcation.unregisterForReady(this);
-                if (mIccRecords != null) {
-                    mIccRecords.unregisterForRecordsLoaded(this);
-                }
-                mIccRecords = null;
-                mUiccApplcation = null;
-            }
+            log("Removing stale icc objects.");
+            unregisterForRuimEvents();
+            mIccRecords = null;
+            mUiccApplcation = null;
             if (newUiccApplication != null) {
                 log("New card found");
                 mUiccApplcation = newUiccApplication;
                 mIccRecords = mUiccApplcation.getIccRecords();
                 if (mIsSubscriptionFromRuim) {
-                    mUiccApplcation.registerForReady(this, EVENT_RUIM_READY, null);
-                    if (mIccRecords != null) {
-                        mIccRecords.registerForRecordsLoaded(this, EVENT_RUIM_RECORDS_LOADED, null);
-                    }
+                    registerForRuimEvents();
                 }
             }
         }

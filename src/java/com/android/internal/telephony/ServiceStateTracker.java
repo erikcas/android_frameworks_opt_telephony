@@ -53,6 +53,7 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import com.android.internal.telephony.dataconnection.DcTrackerBase;
+import com.android.internal.telephony.imsphone.ImsPhone;
 import com.android.internal.telephony.uicc.IccCardApplicationStatus.AppState;
 import com.android.internal.telephony.uicc.IccCardProxy;
 import com.android.internal.telephony.uicc.IccRecords;
@@ -260,7 +261,7 @@ public abstract class ServiceStateTracker extends Handler {
             // Set the network type, in case the radio does not restore it.
             int subId = mPhoneBase.getSubId();
             if (mPreviousSubId.getAndSet(subId) != subId) {
-                if (SubscriptionManager.isValidSubscriptionId(subId)) {
+                if (mSubscriptionController.isActiveSubId(subId)) {
                     Context context = mPhoneBase.getContext();
 
                     mPhoneBase.notifyCallForwardingIndicator();
@@ -1146,5 +1147,54 @@ public abstract class ServiceStateTracker extends Handler {
     /** Check if the device is shutting down. */
     public final boolean isDeviceShuttingDown() {
         return mDeviceShuttingDown;
+    }
+
+    /**
+     * Consider dataRegState if voiceRegState is OOS to determine SPN to be
+     * displayed
+     */
+    protected int getCombinedRegState() {
+        int regState = mSS.getVoiceRegState();
+        int dataRegState = mSS.getDataRegState();
+
+        if ((regState == ServiceState.STATE_OUT_OF_SERVICE)
+                && (dataRegState == ServiceState.STATE_IN_SERVICE)) {
+            log("getCombinedRegState: return STATE_IN_SERVICE as Data is in service");
+            regState = dataRegState;
+        }
+
+        return regState;
+    }
+
+    /**
+     * {@hide}
+     */
+    public boolean isRatLte(int rat) {
+        return (rat == ServiceState.RIL_RADIO_TECHNOLOGY_LTE ||
+            rat == ServiceState.RIL_RADIO_TECHNOLOGY_LTE_CA);
+    }
+
+    protected String maybeUpdateHDTagForSpn(boolean showSpn, String spn) {
+        if (!showSpn) return spn;
+        return maybeUpdateHDTag(spn);
+    }
+
+    protected String maybeUpdateHDTagForPlmn(boolean showPlmn, String plmn) {
+        if (!showPlmn) return plmn;
+        return maybeUpdateHDTag(plmn);
+    }
+
+    private String maybeUpdateHDTag(String networkName) {
+        if (mPhoneBase.getImsPhone() != null &&
+                (((ImsPhone) mPhoneBase.getImsPhone()).isVolteEnabled() ||
+                ((ImsPhone) mPhoneBase.getImsPhone()).isVideoCallEnabled())) {
+            String hdTag = mPhoneBase.getContext().getText(
+                    com.android.internal.R.string.high_definition_tag).toString();
+            String originalNwName = networkName.trim();
+            networkName = String.format(hdTag, originalNwName);
+            Rlog.d(LOG_TAG, "maybeUpdateHDTag: networkName: " + networkName +
+                    " original name: " + originalNwName);
+        }
+        return networkName;
     }
 }
