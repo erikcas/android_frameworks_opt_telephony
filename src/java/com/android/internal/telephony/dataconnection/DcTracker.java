@@ -2628,7 +2628,7 @@ public class DcTracker extends DcTrackerBase {
     }
 
     /** Return the DC AsyncChannel for the new data connection */
-    protected DcAsyncChannel createDataConnection() {
+    private DcAsyncChannel createDataConnection() {
         if (DBG) log("createDataConnection E");
 
         int id = mUniqueIdGenerator.getAndIncrement();

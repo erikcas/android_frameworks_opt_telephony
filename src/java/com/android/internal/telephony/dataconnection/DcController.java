@@ -47,7 +47,7 @@ import java.util.HashMap;
  * multiple data connections. For instance listening for unsolicited messages
  * and then demultiplexing them to the appropriate DC.
  */
-public class DcController extends StateMachine {
+class DcController extends StateMachine {
     private static final boolean DBG = true;
     private static final boolean VDBG = false;
 
