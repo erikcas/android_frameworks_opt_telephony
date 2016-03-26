@@ -113,6 +113,7 @@ public class IccCardProxy extends Handler implements IccCard {
                                         // ACTION_SIM_STATE_CHANGED intents
     private boolean mInitialized = false;
     private State mExternalState = State.UNKNOWN;
+    private PersoSubState mPersoSubState = PersoSubState.PERSOSUBSTATE_UNKNOWN;
 
     public static final String ACTION_INTERNAL_SIM_STATE_CHANGED = "android.intent.action.internal_sim_state_changed";
 
@@ -173,28 +174,15 @@ public class IccCardProxy extends Handler implements IccCard {
             boolean oldQuietMode = mQuietMode;
             boolean newQuietMode;
             int cdmaSource = Phone.CDMA_SUBSCRIPTION_UNKNOWN;
-            boolean isLteOnCdmaMode = TelephonyManager.getLteOnCdmaModeStatic()
-                    == PhoneConstants.LTE_ON_CDMA_TRUE;
             if (mCurrentAppType == UiccController.APP_FAM_3GPP) {
                 newQuietMode = false;
                 if (DBG) log("updateQuietMode: 3GPP subscription -> newQuietMode=" + newQuietMode);
             } else {
-                if (isLteOnCdmaMode) {
-                    log("updateQuietMode: is cdma/lte device, force IccCardProxy into 3gpp mode");
-                    mCurrentAppType = UiccController.APP_FAM_3GPP;
-                }
                 cdmaSource = mCdmaSSM != null ?
                         mCdmaSSM.getCdmaSubscriptionSource() : Phone.CDMA_SUBSCRIPTION_UNKNOWN;
 
                 newQuietMode = (cdmaSource == Phone.CDMA_SUBSCRIPTION_NV)
-                        && (mCurrentAppType == UiccController.APP_FAM_3GPP2)
-                        && !isLteOnCdmaMode;
-                if (DBG) {
-                    log("updateQuietMode: cdmaSource=" + cdmaSource
-                            + " mCurrentAppType=" + mCurrentAppType
-                            + " isLteOnCdmaMode=" + isLteOnCdmaMode
-                            + " newQuietMode=" + newQuietMode);
-                }
+                        && (mCurrentAppType == UiccController.APP_FAM_3GPP2);
             }
 
             if (mQuietMode == false && newQuietMode == true) {
@@ -215,8 +203,7 @@ public class IccCardProxy extends Handler implements IccCard {
             }
             if (DBG) {
                 log("updateQuietMode: QuietMode is " + mQuietMode + " (app_type="
-                    + mCurrentAppType + " isLteOnCdmaMode=" + isLteOnCdmaMode
-                    + " cdmaSource=" + cdmaSource + ")");
+                    + mCurrentAppType + " cdmaSource=" + cdmaSource + ")");
             }
             mInitialized = true;
             sendMessage(obtainMessage(EVENT_ICC_CHANGED));
@@ -284,7 +271,8 @@ public class IccCardProxy extends Handler implements IccCard {
                 broadcastIccStateChangedIntent(IccCardConstants.INTENT_VALUE_ICC_IMSI, null);
                 break;
             case EVENT_NETWORK_LOCKED:
-                mNetworkLockedRegistrants.notifyRegistrants();
+                mPersoSubState = mUiccApplication.getPersoSubState();
+                mNetworkLockedRegistrants.notifyRegistrants((AsyncResult)msg.obj);
                 setExternalState(State.NETWORK_LOCKED);
                 break;
             case EVENT_CDMA_SUBSCRIPTION_SOURCE_CHANGED:
@@ -422,8 +410,8 @@ public class IccCardProxy extends Handler implements IccCard {
                 setExternalState(State.PUK_REQUIRED);
                 break;
             case APPSTATE_SUBSCRIPTION_PERSO:
-                if (mUiccApplication.getPersoSubState() ==
-                        PersoSubState.PERSOSUBSTATE_SIM_NETWORK) {
+                if (mUiccApplication.isPersoLocked()) {
+                    mPersoSubState = mUiccApplication.getPersoSubState();
                     setExternalState(State.NETWORK_LOCKED);
                 } else {
                     setExternalState(State.UNKNOWN);
@@ -678,7 +666,7 @@ public class IccCardProxy extends Handler implements IccCard {
             mNetworkLockedRegistrants.add(r);
 
             if (getState() == State.NETWORK_LOCKED) {
-                r.notifyRegistrant();
+                r.notifyRegistrant(new AsyncResult(null, mPersoSubState.ordinal(), null));
             }
         }
     }
@@ -770,10 +758,10 @@ public class IccCardProxy extends Handler implements IccCard {
     }
 
     @Override
-    public void supplyNetworkDepersonalization(String pin, Message onComplete) {
+    public void supplyNetworkDepersonalization(String pin, String type, Message onComplete) {
         synchronized (mLock) {
             if (mUiccApplication != null) {
-                mUiccApplication.supplyNetworkDepersonalization(pin, onComplete);
+                mUiccApplication.supplyNetworkDepersonalization(pin, type, onComplete);
             } else if (onComplete != null) {
                 Exception e = new RuntimeException("CommandsInterface is not set.");
                 AsyncResult.forMessage(onComplete).exception = e;

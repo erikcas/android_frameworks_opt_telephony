@@ -245,3 +245,14 @@ class SendUSSDParams extends DisplayTextParams {
         ussdString = ussdstring;
     }
 }
+
+class ActivateParams extends CommandParams {
+    int mActivateTarget;
+
+
+    ActivateParams(CommandDetails cmdDet, int target) {
+        super(cmdDet);
+        mActivateTarget = target;
+    }
+}
+

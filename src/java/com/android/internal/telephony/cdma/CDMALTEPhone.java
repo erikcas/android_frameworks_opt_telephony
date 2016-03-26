@@ -34,11 +34,13 @@ import android.provider.Telephony;
 import android.text.TextUtils;
 import android.telephony.SubscriptionManager;
 import android.telephony.Rlog;
+import android.telephony.ServiceState;
 
 import com.android.internal.telephony.CommandsInterface;
 
 import android.telephony.TelephonyManager;
 
+import com.android.internal.telephony.TelephonyPluginDelegate;
 import com.android.internal.telephony.dataconnection.DcTracker;
 import com.android.internal.telephony.MccTable;
 import com.android.internal.telephony.OperatorInfo;
@@ -89,7 +91,7 @@ public class CDMALTEPhone extends CDMAPhone {
 
         Rlog.d(LOG_TAG, "CDMALTEPhone: constructor: sub = " + mPhoneId);
 
-        mDcTracker = new DcTracker(this);
+        mDcTracker = TelephonyPluginDelegate.getInstance().makeDcTracker(this);
 
     }
 
@@ -152,6 +154,10 @@ public class CDMALTEPhone extends CDMAPhone {
             // removeReferences() have already been called
 
             ret = PhoneConstants.DataState.DISCONNECTED;
+        } else if (mSST.getCurrentDataConnectionState() != ServiceState.STATE_IN_SERVICE &&
+                            mOosIsDisconnect) {
+            ret = PhoneConstants.DataState.DISCONNECTED;
+            log("getDataConnectionState: Data is Out of Service. ret = " + ret);
         } else if (mDcTracker.isApnTypeEnabled(apnType) == false) {
             ret = PhoneConstants.DataState.DISCONNECTED;
         } else {
@@ -414,7 +420,7 @@ public class CDMALTEPhone extends CDMAPhone {
                 curIccRecords = mIccRecords.get();
                 if (curIccRecords != null && (curIccRecords instanceof RuimRecords)) {
                     RuimRecords csim = (RuimRecords) curIccRecords;
-                    operatorNumeric = csim.getRUIMOperatorNumeric();
+                    operatorNumeric = csim.getOperatorNumeric();
                 }
             }
         }

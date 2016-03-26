@@ -61,18 +61,29 @@ public final class UsimFileHandler extends IccFileHandler implements IccConstant
         case EF_GID1:
         case EF_GID2:
         case EF_LI:
+        case EF_PLMNWACT:
             return MF_SIM + DF_ADF;
-
+        /* Support for reading user & operator PLMN list from SIM */
+        /* 3GPP TS 11.11. File read : EFPLMNsel) */
+        case EF_PLMN_SEL:
+            return MF_SIM + DF_GSM;
         case EF_PBR:
-            // we only support global phonebook.
-            return MF_SIM + DF_TELECOM + DF_PHONEBOOK;
+            if (mUseLocalPb) {
+                return MF_SIM + DF_ADF + DF_PHONEBOOK;
+            } else {
+                return MF_SIM + DF_TELECOM + DF_PHONEBOOK;
+            }
         }
         String path = getCommonIccEFPath(efid);
         if (path == null) {
             // The EFids in USIM phone book entries are decided by the card manufacturer.
             // So if we don't match any of the cases above and if its a USIM return
             // the phone book path.
-            return MF_SIM + DF_TELECOM + DF_PHONEBOOK;
+            if (mUseLocalPb) {
+                return MF_SIM + DF_ADF + DF_PHONEBOOK;
+            } else {
+                return MF_SIM + DF_TELECOM + DF_PHONEBOOK;
+            }
         }
         return path;
     }

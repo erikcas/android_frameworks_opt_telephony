@@ -440,7 +440,7 @@ public final class SimulatedCommands extends BaseCommands
     }
 
     @Override
-    public void supplyNetworkDepersonalization(String netpin, Message result)  {
+    public void supplyNetworkDepersonalization(String netpin, String type, Message result)  {
         unimplemented(result);
     }
 
@@ -1722,6 +1722,11 @@ public final class SimulatedCommands extends BaseCommands
     }
 
     @Override
+    public void iccOpenLogicalChannel(String AID, byte p2, Message response) {
+        unimplemented(response);
+    }
+
+    @Override
     public void iccCloseLogicalChannel(int channel, Message response) {
         unimplemented(response);
     }
@@ -1735,6 +1740,11 @@ public final class SimulatedCommands extends BaseCommands
     @Override
     public void iccTransmitApduBasicChannel(int cla, int instruction, int p1, int p2,
             int p3, String data, Message response) {
+        unimplemented(response);
+    }
+
+    @Override
+    public void getAtr(Message response) {
         unimplemented(response);
     }
 

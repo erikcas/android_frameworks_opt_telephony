@@ -31,56 +31,20 @@ import java.lang.NullPointerException;
 
 public class PhoneSubInfoController extends IPhoneSubInfo.Stub {
     private static final String TAG = "PhoneSubInfoController";
-    private final Phone[] mPhone;
-    private final Context mContext;
-    private final AppOpsManager mAppOps;
+    private Phone[] mPhone;
+    private static final int PHONE_ID_1 = 0;
 
-    public PhoneSubInfoController(Phone[] phones) {
-        mPhone = phones;
-        Context context = null;
-        AppOpsManager appOpsManager = null;
-        for (Phone phone : mPhone) {
-            if (phone != null) {
-                context = phone.getContext();
-                appOpsManager = context.getSystemService(AppOpsManager.class);
-                break;
-            }
-        }
-        mContext = context;
-        mAppOps = appOpsManager;
+    public PhoneSubInfoController(Phone[] phone) {
+        mPhone = phone;
         if (ServiceManager.getService("iphonesubinfo") == null) {
             ServiceManager.addService("iphonesubinfo", this);
         }
     }
 
-    // try-state
-    // either have permission (true), don't (exception), or explicitly turned off (false)
-    private boolean canReadPhoneState(String callingPackage, String message) {
-        if (mContext == null) return false;
-        try {
-            mContext.enforceCallingOrSelfPermission(
-                    android.Manifest.permission.READ_PRIVILEGED_PHONE_STATE, message);
-
-            // SKIP checking for run-time permission since caller or self has PRIVILEDGED permission
-            return true;
-        } catch (SecurityException e) {
-            mContext.enforceCallingOrSelfPermission(android.Manifest.permission.READ_PHONE_STATE,
-                    message);
-        }
-
-
-
-        if (mAppOps.noteOp(AppOpsManager.OP_READ_PHONE_STATE, Binder.getCallingUid(),
-                callingPackage) != AppOpsManager.MODE_ALLOWED) {
-            return false;
-        }
-
-        return true;
-    }
-
+    // The device id should be constant for non-msim applications
+    // so always return device id from first phone.
     public String getDeviceId(String callingPackage) {
-        return getDeviceIdForPhone(SubscriptionManager.getPhoneId(getDefaultSubscription()),
-                callingPackage);
+        return getDeviceIdForPhone(PHONE_ID_1);
     }
 
     public String getDeviceIdForPhone(int phoneId, String callingPackage) {
@@ -122,8 +86,11 @@ public class PhoneSubInfoController extends IPhoneSubInfo.Stub {
         }
     }
 
+    // The device svn should be constant for non-msim applications
+    // so always return device svn from first phone.
     public String getDeviceSvn(String callingPackage) {
-        return getDeviceSvnUsingSubId(getDefaultSubscription(), callingPackage);
+        int[] subId = SubscriptionController.getInstance().getSubId(PHONE_ID_1);
+        return getDeviceSvnUsingSubId(subId[0], callingPackage);
     }
 
     public String getDeviceSvnUsingSubId(int subId, String callingPackage) {

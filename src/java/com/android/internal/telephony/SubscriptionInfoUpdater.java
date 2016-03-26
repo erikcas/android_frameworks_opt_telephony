@@ -37,6 +37,7 @@ import android.os.ServiceManager;
 import android.os.UserHandle;
 import android.preference.PreferenceManager;
 import android.provider.Settings;
+import android.provider.Settings.SettingNotFoundException;
 import android.telephony.Rlog;
 import android.telephony.CarrierConfigManager;
 import android.telephony.SubscriptionManager;
@@ -98,7 +99,7 @@ public class SubscriptionInfoUpdater extends Handler {
 
     private static Phone[] mPhone;
     private static Context mContext = null;
-    private static String mIccId[] = new String[PROJECT_SIM_NUM];
+    protected static String mIccId[] = new String[PROJECT_SIM_NUM];
     private static int[] mInsertSimState = new int[PROJECT_SIM_NUM];
     private SubscriptionManager mSubscriptionManager = null;
     private IPackageManager mPackageManager;
@@ -211,7 +212,7 @@ public class SubscriptionInfoUpdater extends Handler {
         }
     };
 
-    private boolean isAllIccIdQueryDone() {
+    protected boolean isAllIccIdQueryDone() {
         for (int i = 0; i < PROJECT_SIM_NUM; i++) {
             if (mIccId[i] == null) {
                 logd("Wait for SIM" + (i + 1) + " IccId");
@@ -429,6 +430,25 @@ public class SubscriptionInfoUpdater extends Handler {
 
             if (storedSubId != subId) {
                 int networkType = RILConstants.PREFERRED_NETWORK_MODE;
+                //Get previous network mode for this slot,
+                // to be more relevant instead of default mode
+                try {
+                    networkType  = android.provider.Settings.Global.getInt(
+                            mContext.getContentResolver(),
+                            Settings.Global.PREFERRED_NETWORK_MODE + subId);
+                } catch (SettingNotFoundException snfe) {
+
+                    logd("Settings Exception reading value at subid for"+
+                         " Settings.Global.PREFERRED_NETWORK_MODE");
+                    try {
+                        networkType  = TelephonyManager.getIntAtIndex(
+                                mContext.getContentResolver(),
+                               Settings.Global.PREFERRED_NETWORK_MODE, slotId);
+                    } catch (SettingNotFoundException retrySnfe) {
+                        Rlog.e(LOG_TAG, "Settings Exception Reading Value At Index for"+
+                               " Settings.Global.PREFERRED_NETWORK_MODE");
+                    }
+                }
 
                 // Set the modem network mode
                 mPhone[slotId].setPreferredNetworkType(networkType, null);
@@ -464,7 +484,7 @@ public class SubscriptionInfoUpdater extends Handler {
         mCarrierServiceBindHelper.updateForPhoneId(slotId, simState);
     }
 
-    private void handleSimAbsent(int slotId) {
+    protected void handleSimAbsent(int slotId) {
         if (mIccId[slotId] != null && !mIccId[slotId].equals(ICCID_STRING_FOR_NO_SIM)) {
             logd("SIM" + (slotId + 1) + " hot plug out");
         }
@@ -479,7 +499,7 @@ public class SubscriptionInfoUpdater extends Handler {
      * TODO: Simplify more, as no one is interested in what happened
      * only what the current list contains.
      */
-    synchronized private void updateSubscriptionInfoByIccId() {
+    synchronized protected void updateSubscriptionInfoByIccId() {
         logd("updateSubscriptionInfoByIccId:+ Start");
 
         mSubscriptionManager.clearSubscriptionInfo();

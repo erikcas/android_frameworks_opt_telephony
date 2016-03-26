@@ -82,7 +82,9 @@ public abstract class IccRecords extends Handler implements IccConstants {
     protected int mMncLength = UNINITIALIZED;
     protected int mMailboxIndex = 0; // 0 is no mailbox dailing number associated
 
-    private String mSpn;
+    protected int mSmsCountOnIcc = -1;
+
+    protected String mSpn;
 
     protected String mGid1;
     protected String mGid2;
@@ -106,9 +108,15 @@ public abstract class IccRecords extends Handler implements IccConstants {
     public static final int EVENT_CFI = 1; // Call Forwarding indication
     public static final int EVENT_SPN = 2; // Service Provider Name
 
+
     public static final int EVENT_GET_ICC_RECORD_DONE = 100;
+    public static final int EVENT_REFRESH = 31; // ICC refresh occurred
     protected static final int EVENT_APP_READY = 1;
     private static final int EVENT_AKA_AUTHENTICATE_DONE          = 90;
+    protected static final int EVENT_GET_SMS_RECORD_SIZE_DONE = 28;
+
+    public static final int DEFAULT_VOICE_MESSAGE_COUNT = -2;
+    public static final int UNKNOWN_VOICE_MESSAGE_COUNT = -1;
 
     public static final int CALL_FORWARDING_STATUS_DISABLED = 0;
     public static final int CALL_FORWARDING_STATUS_ENABLED = 1;
@@ -169,6 +177,7 @@ public abstract class IccRecords extends Handler implements IccConstants {
         mParentApp = app;
         mTelephonyManager = (TelephonyManager) mContext.getSystemService(
                 Context.TELEPHONY_SERVICE);
+        mCi.registerForIccRefresh(this, EVENT_REFRESH, null);
     }
 
     /**
@@ -176,6 +185,7 @@ public abstract class IccRecords extends Handler implements IccConstants {
      */
     public void dispose() {
         mDestroyed.set(true);
+        mCi.unregisterForIccRefresh(this);
         mParentApp = null;
         mFh = null;
         mCi = null;
@@ -198,6 +208,14 @@ public abstract class IccRecords extends Handler implements IccConstants {
             return;
         }
 
+        for (int i = mRecordsLoadedRegistrants.size() - 1; i >= 0 ; i--) {
+            Registrant  r = (Registrant) mRecordsLoadedRegistrants.get(i);
+            Handler rH = r.getHandler();
+
+            if (rH != null && rH == h) {
+                return;
+            }
+        }
         Registrant r = new Registrant(h, what, obj);
         mRecordsLoadedRegistrants.add(r);
 
@@ -430,20 +448,6 @@ public abstract class IccRecords extends Handler implements IccConstants {
      */
     public abstract void onRefresh(boolean fileChanged, int[] fileList);
 
-    /**
-     * Called by subclasses (SimRecords and RuimRecords) whenever
-     * IccRefreshResponse.REFRESH_RESULT_INIT event received
-     */
-    protected void onIccRefreshInit() {
-        mAdnCache.reset();
-        UiccCardApplication parentApp = mParentApp;
-        if ((parentApp != null) &&
-                (parentApp.getState() == AppState.APPSTATE_READY)) {
-            // This will cause files to be reread
-            sendMessage(obtainMessage(EVENT_APP_READY));
-        }
-    }
-
     public boolean getRecordsLoaded() {
         if (mRecordsToLoad == 0 && mRecordsRequested == true) {
             return true;
@@ -478,6 +482,17 @@ public abstract class IccRecords extends Handler implements IccConstants {
                 }
                 break;
 
+            case EVENT_REFRESH:
+                ar = (AsyncResult)msg.obj;
+                if (DBG) log("Card REFRESH occurred: ");
+                if (ar.exception == null) {
+                    broadcastRefresh();
+                    handleRefresh((IccRefreshResponse)ar.result);
+                } else {
+                    loge("Icc refresh Exception: " + ar.exception);
+                }
+                break;
+
             case EVENT_AKA_AUTHENTICATE_DONE:
                 ar = (AsyncResult)msg.obj;
                 auth_rsp = null;
@@ -496,6 +511,28 @@ public abstract class IccRecords extends Handler implements IccConstants {
                     mLock.notifyAll();
                 }
 
+                break;
+            case EVENT_GET_SMS_RECORD_SIZE_DONE:
+                ar = (AsyncResult) msg.obj;
+
+                if (ar.exception != null) {
+                    loge("Exception in EVENT_GET_SMS_RECORD_SIZE_DONE " + ar.exception);
+                    break;
+                }
+
+                int[] recordSize = (int[])ar.result;
+                try {
+                    // recordSize[0]  is the record length
+                    // recordSize[1]  is the total length of the EF file
+                    // recordSize[2]  is the number of records in the EF file
+                    mSmsCountOnIcc = recordSize[2];
+                    log("EVENT_GET_SMS_RECORD_SIZE_DONE Size " + recordSize[0]
+                            + " total " + recordSize[1]
+                                    + " record " + recordSize[2]);
+                } catch (ArrayIndexOutOfBoundsException exc) {
+                    loge("ArrayIndexOutOfBoundsException in EVENT_GET_SMS_RECORD_SIZE_DONE: "
+                            + exc.toString());
+                }
                 break;
 
             default:
@@ -546,6 +583,48 @@ public abstract class IccRecords extends Handler implements IccConstants {
         return null;
     }
 
+    protected abstract void handleFileUpdate(int efid);
+
+    protected void broadcastRefresh() {
+    }
+
+    protected void handleRefresh(IccRefreshResponse refreshResponse){
+        if (refreshResponse == null) {
+            if (DBG) log("handleRefresh received without input");
+            return;
+        }
+
+        if (refreshResponse.aid != null &&
+                !refreshResponse.aid.equals(mParentApp.getAid())) {
+            // This is for different app. Ignore.
+            return;
+        }
+
+        switch (refreshResponse.refreshResult) {
+            case IccRefreshResponse.REFRESH_RESULT_FILE_UPDATE:
+                if (DBG) log("handleRefresh with SIM_FILE_UPDATED");
+                handleFileUpdate(refreshResponse.efId);
+                break;
+            case IccRefreshResponse.REFRESH_RESULT_INIT:
+                if (DBG) log("handleRefresh with SIM_REFRESH_INIT");
+                // need to reload all files (that we care about)
+                if (mAdnCache != null) {
+                    mAdnCache.reset();
+                    //We will re-fetch the records when the app
+                    // goes back to the ready state. Nothing to do here.
+                }
+                break;
+            case IccRefreshResponse.REFRESH_RESULT_RESET:
+                // Refresh reset is handled by the UiccCard object.
+                if (DBG) log("handleRefresh with SIM_REFRESH_RESET");
+                break;
+            default:
+                // unknown refresh operation
+                if (DBG) log("handleRefresh with unknown operation");
+                break;
+        }
+    }
+
     protected abstract void onRecordLoaded();
 
     protected abstract void onAllRecordsLoaded();
@@ -577,6 +656,14 @@ public abstract class IccRecords extends Handler implements IccConstants {
      */
     public String getOperatorNumeric() {
         return null;
+    }
+
+    /**
+     * Check if call forward info is stored on SIM
+     * @return true if call forward info is stored on SIM.
+     */
+    public boolean isCallForwardStatusStored() {
+        return false;
     }
 
     /**
@@ -683,6 +770,14 @@ public abstract class IccRecords extends Handler implements IccConstants {
         if (DBG) log("getIccSimChallengeResponse: return auth_rsp");
 
         return android.util.Base64.encodeToString(auth_rsp.payload, android.util.Base64.NO_WRAP);
+    }
+
+    /**
+     * To get SMS capacity count on ICC card.
+     */
+    public int getSmsCapacityOnIcc() {
+        if (DBG) log("getSmsCapacityOnIcc: " + mSmsCountOnIcc);
+        return mSmsCountOnIcc;
     }
 
     public void dump(FileDescriptor fd, PrintWriter pw, String[] args) {
