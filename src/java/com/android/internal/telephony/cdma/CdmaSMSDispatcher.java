@@ -269,7 +269,7 @@ public class CdmaSMSDispatcher extends SMSDispatcher {
 
         int currentDataNetwork = mPhone.getServiceState().getDataNetworkType();
         boolean imsSmsDisabled = (currentDataNetwork == TelephonyManager.NETWORK_TYPE_EHRPD
-                    || (mPhone.getServiceStateTracker().isRatLte(currentDataNetwork)
+                    || (currentDataNetwork == TelephonyManager.NETWORK_TYPE_LTE
                     && !mPhone.getServiceStateTracker().isConcurrentVoiceAndDataAllowed()))
                     && mPhone.getServiceState().getVoiceNetworkType()
                     == TelephonyManager.NETWORK_TYPE_1xRTT
