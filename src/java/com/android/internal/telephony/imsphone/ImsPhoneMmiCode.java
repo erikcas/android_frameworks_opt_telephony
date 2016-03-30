@@ -1054,7 +1054,6 @@ public final class ImsPhoneMmiCode extends Handler implements MmiCode {
                     boolean cffEnabled = (msg.arg2 == 1);
                     mPhone.setVoiceCallForwardingFlag(1, cffEnabled, mDialingNumber);
                     mPhone.setCallForwardingPreference(cffEnabled);
-                    mPhone.setVideoCallForwardingPreference(cffEnabled);
                 }
 
                 onSetComplete(msg, ar);
