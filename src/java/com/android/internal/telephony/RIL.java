@@ -85,6 +85,8 @@ import java.io.FileDescriptor;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintWriter;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -243,6 +245,17 @@ public class RIL extends BaseCommands implements CommandsInterface {
      * the vendor ril.
      */
     private static final int DEFAULT_WAKE_LOCK_TIMEOUT = 60000;
+    private static final int BYTE_SIZE = 1;
+
+    /** Starting number for OEMHOOK request and response IDs */
+    private static final int OEMHOOK_BASE = 0x80000;
+
+    /** Set Local Call Hold subscription */
+    private static final int OEMHOOK_EVT_HOOK_SET_LOCAL_CALL_HOLD = OEMHOOK_BASE + 13;
+
+    private static final int INT_SIZE = 4;
+    private static final String OEM_IDENTIFIER = "QOEMHOOK";
+    int mHeaderSize = OEM_IDENTIFIER.length() + 2 * INT_SIZE;
 
     //***** Instance Variables
 
@@ -747,19 +760,17 @@ public class RIL extends BaseCommands implements CommandsInterface {
         send(rr);
     }
 
-    public void setUiccSubscription(int slotId, int appIndex, int subId,
-            int subStatus, Message result) {
+    public void setUiccSubscription(int appIndex, boolean activate, Message result) {
         //Note: This RIL request is also valid for SIM and RUIM (ICC card)
         RILRequest rr = RILRequest.obtain(RIL_REQUEST_SET_UICC_SUBSCRIPTION, result);
 
         if (RILJ_LOGD) riljLog(rr.serialString() + "> " + requestToString(rr.mRequest)
-                + " slot: " + slotId + " appIndex: " + appIndex
-                + " subId: " + subId + " subStatus: " + subStatus);
+                + " appIndex: " + appIndex + " activate: " + activate);
 
-        rr.mParcel.writeInt(slotId);
+        rr.mParcel.writeInt(mInstanceId);
         rr.mParcel.writeInt(appIndex);
-        rr.mParcel.writeInt(subId);
-        rr.mParcel.writeInt(subStatus);
+        rr.mParcel.writeInt(mInstanceId);
+        rr.mParcel.writeInt(activate ? 1 : 0);
 
         send(rr);
     }
@@ -2002,6 +2013,38 @@ public class RIL extends BaseCommands implements CommandsInterface {
         if (RILJ_LOGD) riljLog(rr.serialString() + "> " + requestToString(rr.mRequest));
 
         send(rr);
+    }
+
+
+    @Override
+    public void setLocalCallHold(boolean lchStatus) {
+        byte param = lchStatus ? (byte)1 : 0;
+        byte[] payload = new byte[]{param};
+        Rlog.d(RILJ_LOG_TAG, "setLocalCallHold: lchStatus is " + lchStatus);
+
+        sendOemRilRequestRaw(OEMHOOK_EVT_HOOK_SET_LOCAL_CALL_HOLD, 1, payload, null);
+    }
+
+    private void sendOemRilRequestRaw(int requestId, int numPayload, byte[] payload,
+            Message response) {
+        byte[] request = new byte[mHeaderSize + numPayload * BYTE_SIZE];
+
+        ByteBuffer buf= ByteBuffer.wrap(request);
+        buf.order(ByteOrder.nativeOrder());
+
+        // Add OEM identifier String
+        buf.put(OEM_IDENTIFIER.getBytes());
+        // Add Request ID
+        buf.putInt(requestId);
+        if (numPayload > 0 && payload != null) {
+            // Add Request payload length
+            buf.putInt(numPayload * BYTE_SIZE);
+            for (byte b : payload) {
+                buf.put(b);
+            }
+        }
+
+        invokeOemRilRequestRaw(request, response);
     }
 
     @Override

@@ -88,6 +88,8 @@ public class UiccCard {
     private CatService mCatService;
     private RadioState mLastRadioState =  RadioState.RADIO_UNAVAILABLE;
     private UiccCarrierPrivilegeRules mCarrierPrivilegeRules;
+    private boolean mDefaultAppsActivated;
+    private UICCConfig mUICCConfig = null;
 
     private RegistrantList mAbsentRegistrants = new RegistrantList();
     private RegistrantList mCarrierPrivilegeRegistrants = new RegistrantList();
@@ -132,6 +134,7 @@ public class UiccCard {
             mCatService = null;
             mUiccApplications = null;
             mCarrierPrivilegeRules = null;
+            mUICCConfig = null;
         }
     }
 
@@ -147,6 +150,8 @@ public class UiccCard {
             mCi = ci;
 
             //update applications
+            if (mUICCConfig == null)
+                mUICCConfig = new UICCConfig();
             if (DBG) log(ics.mApplications.length + " applications");
             for ( int i = 0; i < mUiccApplications.length; i++) {
                 if (mUiccApplications[i] == null) {
@@ -194,6 +199,19 @@ public class UiccCard {
                     mHandler.sendMessage(mHandler.obtainMessage(EVENT_CARD_ADDED, null));
                 }
             }
+            if (mCi.needsOldRilFeature("simactivation")) {
+                if (mCardState == CardState.CARDSTATE_PRESENT) {
+                    if (!mDefaultAppsActivated) {
+                        activateDefaultApps();
+                        mDefaultAppsActivated = true;
+                    }
+                } else {
+                    // SIM removed, reset activation flag to make sure
+                    // to re-run the activation at the next insertion
+                    mDefaultAppsActivated = false;
+                }
+            }
+
             mLastRadioState = radioState;
         }
     }
@@ -257,6 +275,34 @@ public class UiccCard {
 
         // Seems to be valid
         return index;
+    }
+
+    private void activateDefaultApps() {
+        int gsmIndex = mGsmUmtsSubscriptionAppIndex;
+        int cdmaIndex = mCdmaSubscriptionAppIndex;
+
+        if (gsmIndex < 0 || cdmaIndex < 0) {
+            for (int i = 0; i < mUiccApplications.length; i++) {
+                if (mUiccApplications[i] == null) {
+                    continue;
+                }
+
+                AppType appType = mUiccApplications[i].getType();
+                if (gsmIndex < 0
+                        && (appType == AppType.APPTYPE_USIM || appType == AppType.APPTYPE_SIM)) {
+                    gsmIndex = i;
+                } else if (cdmaIndex < 0 &&
+                        (appType == AppType.APPTYPE_CSIM || appType == AppType.APPTYPE_RUIM)) {
+                    cdmaIndex = i;
+                }
+            }
+        }
+        if (gsmIndex >= 0) {
+            mCi.setUiccSubscription(gsmIndex, true, null);
+        }
+        if (cdmaIndex >= 0) {
+            mCi.setUiccSubscription(cdmaIndex, true, null);
+        }
     }
 
     /**
@@ -660,6 +706,10 @@ public class UiccCard {
             }
         }
         return null;
+    }
+
+    public UICCConfig getUICCConfig() {
+        return mUICCConfig;
     }
 
     private void log(String msg) {

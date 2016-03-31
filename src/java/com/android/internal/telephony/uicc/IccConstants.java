@@ -45,6 +45,7 @@ public interface IccConstants {
     static final int EF_SST = 0x6f38;
     static final int EF_CFIS = 0x6FCB;
     static final int EF_IMG = 0x4f20;
+    static final int EF_PLMN_SEL = 0x6F30;
 
     // USIM SIM file ids from TS 131.102
     public static final int EF_PBR = 0x4F30;
@@ -81,6 +82,11 @@ public interface IccConstants {
     static final int EF_IST = 0x6f07;
     static final int EF_PCSCF = 0x6f09;
     static final int EF_PSI = 0x6fe5;
+
+    //plmnwact
+    static final int EF_PLMNWACT = 0x6F60;
+    //hplmnwact
+    static final int EF_HPLMNWACT = 0x6F62;
 
     // SMS record length from TS 51.011 10.5.3
     static public final int SMS_RECORD_LENGTH = 176;

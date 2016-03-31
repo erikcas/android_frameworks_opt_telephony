@@ -856,8 +856,7 @@ public abstract class BaseCommands implements CommandsInterface {
         return mRilVersion;
     }
 
-    public void setUiccSubscription(int slotId, int appIndex, int subId, int subStatus,
-            Message response) {
+    public void setUiccSubscription(int appIndex, boolean activate, Message response) {
     }
 
     public void setDataAllowed(boolean allowed, Message response) {
@@ -909,5 +908,9 @@ public abstract class BaseCommands implements CommandsInterface {
           mLceInfoRegistrant.clear();
           mLceInfoRegistrant = null;
       }
+    }
+
+    @Override
+    public void setLocalCallHold(boolean lchStatus) {
     }
 }
