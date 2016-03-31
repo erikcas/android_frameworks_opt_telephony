@@ -1985,6 +1985,20 @@ public interface CommandsInterface {
     public void unregisterForRadioCapabilityChanged(Handler h);
 
     /**
+     * @hide
+     * CM-specific: Ask the RIL about the presence of back-compat flags
+     */
+    public boolean needsOldRilFeature(String feature);
+
+    /**
+     * @hide
+     * samsung stk service implementation - set up registrant for sending
+     * sms send result from modem(RIL) to catService
+     */
+    void setOnCatSendSmsResult(Handler h, int what, Object obj);
+    void unSetOnCatSendSmsResult(Handler h);
+
+    /**
      * Start LCE (Link Capacity Estimation) service with a desired reporting interval.
      *
      * @param reportIntervalMs

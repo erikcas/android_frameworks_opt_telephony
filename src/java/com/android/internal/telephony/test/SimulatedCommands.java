@@ -1779,6 +1779,9 @@ public final class SimulatedCommands extends BaseCommands
     }
 
     @Override
+    public boolean needsOldRilFeature(String feature) { return false; }
+
+    @Override
     public void startLceService(int report_interval_ms, boolean pullMode, Message result) {
         unimplemented(result);
     }

@@ -576,7 +576,7 @@ public class DataConnection extends StateMachine {
         }
 
         mPhone.mCi.setupDataCall(
-                Integer.toString(cp.mRilRat + 2),
+                Integer.toString(getSetupRilRadioTechnology(cp.mRilRat)),
                 Integer.toString(cp.mProfileId),
                 mApnSetting.apn, mApnSetting.user, mApnSetting.password,
                 Integer.toString(authType),
@@ -725,6 +725,21 @@ public class DataConnection extends StateMachine {
             notifyAllWithEvent(alreadySent, DctConstants.EVENT_DISCONNECT_DONE, reason);
         }
         if (DBG) log("NotifyDisconnectCompleted DisconnectParams=" + dp);
+    }
+
+    private int getSetupRilRadioTechnology(int rilRadioTechnology) {
+        if (mPhone.mCi.getRilVersion() < 6) {
+            int phoneType = mPhone.getPhoneType();
+            if (phoneType == PhoneConstants.PHONE_TYPE_GSM) {
+                return RILConstants.SETUP_DATA_TECH_GSM;
+            } else if (phoneType == PhoneConstants.PHONE_TYPE_CDMA) {
+                return RILConstants.SETUP_DATA_TECH_CDMA;
+            } else {
+                throw new RuntimeException("Unknown phoneType " + phoneType + ", should not happen");
+            }
+        } else {
+            return rilRadioTechnology + 2;
+        }
     }
 
     /*
@@ -1817,8 +1832,10 @@ public class DataConnection extends StateMachine {
 
             boolean createNetworkAgent = true;
             // If a disconnect is already pending, avoid notifying all of connected
-            if (DataConnection.this.getHandler().hasMessages(EVENT_DISCONNECT) ||
-                    DataConnection.this.getHandler().hasMessages(EVENT_DISCONNECT_ALL)) {
+            if (hasMessages(EVENT_DISCONNECT) ||
+                    hasMessages(EVENT_DISCONNECT_ALL) ||
+                    hasDeferredMessages(EVENT_DISCONNECT) ||
+                    hasDeferredMessages(EVENT_DISCONNECT_ALL)) {
                 log("DcActiveState: skipping notifyAllOfConnected()");
                 createNetworkAgent = false;
             } else {

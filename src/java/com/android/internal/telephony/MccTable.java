@@ -24,6 +24,7 @@ import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.RemoteException;
 import android.os.SystemProperties;
+import android.provider.Settings;
 import android.telephony.TelephonyManager;
 import android.text.TextUtils;
 import android.util.Slog;
@@ -220,6 +221,29 @@ public final class MccTable {
         }
     }
 
+    // Bug 19232829: It is possible to get through provisioning without setting up a persistent
+    // locale value. We don't modify the locale if the device has completed "provisioning" because
+    // we don't want to change the locale if the user inserts a new SIM or a new version of Android
+    // is better at recognizing MCC values than an older version.
+    private static boolean canUpdateLocale(Context context) {
+        return !(userHasPersistedLocale() || isDeviceProvisioned(context));
+    }
+
+    private static boolean userHasPersistedLocale() {
+        String persistSysLanguage = SystemProperties.get("persist.sys.language", "");
+        String persistSysCountry = SystemProperties.get("persist.sys.country", "");
+        return !(persistSysLanguage.isEmpty() && persistSysCountry.isEmpty());
+    }
+
+    private static boolean isDeviceProvisioned(Context context) {
+        try {
+            return Settings.Global.getInt(
+                    context.getContentResolver(), Settings.Global.DEVICE_PROVISIONED) != 0;
+        } catch (Settings.SettingNotFoundException e) {
+            return false;
+        }
+    }
+
     /**
      * Maps a given locale to a fallback locale that approximates it. This is a hack.
      */
@@ -321,6 +345,16 @@ public final class MccTable {
         return null;
     }
 
+    private static boolean isDebuggingMccOverride() {
+        if (Build.IS_DEBUGGABLE) {
+            String overrideMcc = SystemProperties.get("persist.sys.override_mcc", "");
+            if (!overrideMcc.isEmpty()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /**
      * If the timezone is not already set, set it based on the MCC of the SIM.
      * @param context Context to act on.
@@ -376,10 +410,19 @@ public final class MccTable {
      */
     private static void setWifiCountryCodeFromMcc(Context context, int mcc) {
         String country = MccTable.countryCodeForMcc(mcc);
-        Slog.d(LOG_TAG, "WIFI_COUNTRY_CODE set to " + country);
-        WifiManager wM = (WifiManager) context.getSystemService(Context.WIFI_SERVICE);
-        //persist
-        wM.setCountryCode(country, true);
+        // safe if we need it later
+        Settings.Global.putString(context.getContentResolver(),
+                Settings.Global.WIFI_COUNTRY_CODE_SIM0, country.toUpperCase(Locale.ROOT));
+
+        // dont override by default only if reset == value is null
+        String countryCode = Settings.Global.getString(context.getContentResolver(),
+                Settings.Global.WIFI_COUNTRY_CODE);
+        if(countryCode == null || countryCode.isEmpty()){
+            Slog.i(LOG_TAG, "WIFI_COUNTRY_CODE set to " + country);
+            WifiManager wM = (WifiManager) context.getSystemService(Context.WIFI_SERVICE);
+            //persist
+            wM.setCountryCode(country, true);
+        }
     }
 
     static {
@@ -590,7 +633,7 @@ public final class MccTable {
 		sTable.add(new MccEntry(627,"gq",2));	//Equatorial Guinea (Republic of)
 		sTable.add(new MccEntry(628,"ga",2));	//Gabonese Republic
 		sTable.add(new MccEntry(629,"cg",2));	//Congo (Republic of the)
-		sTable.add(new MccEntry(630,"cg",2));	//Democratic Republic of the Congo
+		sTable.add(new MccEntry(630,"cd",2));	//Democratic Republic of the Congo
 		sTable.add(new MccEntry(631,"ao",2));	//Angola (Republic of)
 		sTable.add(new MccEntry(632,"gw",2));	//Guinea-Bissau (Republic of)
 		sTable.add(new MccEntry(633,"sc",2));	//Seychelles (Republic of)

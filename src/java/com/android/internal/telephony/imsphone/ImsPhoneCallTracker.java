@@ -1000,7 +1000,11 @@ public final class ImsPhoneCallTracker extends CallTracker {
                 }
             }
 
-            mIsInEmergencyCall = isEmergencyCallInList;
+            if (!isEmergencyCallInList) {
+                mIsInEmergencyCall = false;
+                mPhone.mDefaultPhone.sendEmergencyCallStateChange(false);
+            }
+
         }
     }
 
@@ -1008,6 +1012,7 @@ public final class ImsPhoneCallTracker extends CallTracker {
         mConnections.add(conn);
         if (conn.isEmergency()) {
             mIsInEmergencyCall = true;
+            mPhone.mDefaultPhone.sendEmergencyCallStateChange(true);
         }
     }
 
